@@ -15,6 +15,19 @@ from typing import Callable
 import logging
 logging.basicConfig(filename='personal_assistant_tool.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Shared rule appended to every subagent's system prompt. Subagents are invoked
+# statelessly (one shot per call), so they cannot have a follow-up turn. If the
+# request is ambiguous, they must signal back to the supervisor instead of
+# asking a question that would just trigger another identical invocation.
+NO_FOLLOWUP_RULE = """
+
+You will not have a follow-up turn with the user. Do not ask the user questions.
+If the request is ambiguous or is missing information you need, respond with a
+single message that begins exactly with "NEED_CLARIFICATION:" followed by a
+concise description of what is missing, then stop. Otherwise answer the request
+fully in one message.
+"""
+
 # All system prompts are recommended by Copilot - Claude Ops 4.6,
 
 llm = ChatOllama( 
@@ -64,7 +77,7 @@ weather_agent = create_agent(
             - get_weather_forecast_tool(city, days): get the weather forecast for a city for up to 10 days. If the user ask for more than 10 days, you give them the weather for up to ten and explain you can't go pass that. 
         When reporting the weather you are very verbose and you include as much information as possible.  
         If the user asks for a forecast you give them the forecast for each day.
-        """)
+        """ + NO_FOLLOWUP_RULE)
 
 exercise_agent = create_agent(
     model=llm,
@@ -86,7 +99,7 @@ exercise_agent = create_agent(
         - create_exercise_reps_note_tool
         - create_weight_note_tool
     Whenever you track anything from the user you give both confirmation of whether the information was tracked and what was tracked. 
-    """
+    """ + NO_FOLLOWUP_RULE
 )
 
 date_and_time_agent = create_agent(
@@ -103,7 +116,7 @@ date_and_time_agent = create_agent(
         - get_current_datetime_tool
     You even have to tool to help with understanding time related math problems and even explaining difficult concepts you have problems with. 
     That tool is called the wolfram tool. 
-    """
+    """ + NO_FOLLOWUP_RULE
 )
 
 
@@ -115,7 +128,7 @@ stem_agent = create_agent(
     system_prompt="""
     You are a science, technology, engineering, math genius! You are a PhD level scientist in a fields including astronomy, biology, chemistry, physics, and many more. 
     Your understanding of both pure mathematics and applied mathematics is unrivaled! In the rare cases you come across a problem you can't solve you use the wolfram_tool.
-    """
+    """ + NO_FOLLOWUP_RULE
 )
 
 coder_agent = create_agent(
@@ -123,7 +136,7 @@ coder_agent = create_agent(
     system_prompt="""
     You are a top software engineer. You have an advanced understanding of software engineering and coding.
     You are able to explain the solutions to your problems in great detail. 
-    """
+    """ + NO_FOLLOWUP_RULE
 )
 
 task_manager_agent = create_agent(
@@ -146,7 +159,7 @@ task_manager_agent = create_agent(
     Add calculating time always use the add_task_tool to make the task.
 
     For every prompt you get, you should always call either the add_task_tool or the list_incomplete_tasks_tool.
-    """
+    """ + NO_FOLLOWUP_RULE
 )
 
 email_agent = create_agent(
@@ -178,5 +191,5 @@ email_agent = create_agent(
     6. If attaching files, ensure the file path is valid
     
     Always inform the user when the email has been sent successfully with the message ID.
-    """
+    """ + NO_FOLLOWUP_RULE
 )

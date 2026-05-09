@@ -6,6 +6,8 @@ from supervisor_agent import agent, invoke_agent
 logging.basicConfig(filename='app.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
+st.set_page_config(page_title=config["assistant-name"], page_icon="🤖")
+
 def render_agent_message(message_content: str, download_key: str, file_name: str) -> None:
     download_tag = config["download_markdown_tag"]
     download_content = f"{download_tag}\n\n{message_content}"
@@ -29,6 +31,9 @@ def render_agent_message(message_content: str, download_key: str, file_name: str
 
 st.title(config["assistant-name"])
 # conversation_start = invoke_agent("Without calling any tools, tell me what your capabilities are and greet me nicely!")
+
+if st.button("Track Exercise"):
+    st.switch_page("pages/track_exercise.py")
 
 
 
