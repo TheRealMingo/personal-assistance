@@ -392,22 +392,23 @@ with tab_station:
                 payload["route"] = route_filter
             if max_results:
                 payload["max_results"] = int(max_results)
-            with st.spinner("Calling CTA Train Tracker…"):
-                result = get_train_arrivals_for_station_tool.invoke(payload)
-            st.session_state["station_result"] = result
-            st.session_state["station_query_id"] = chosen_mapid
-            st.session_state["station_query_name"] = chosen_name
-            st.session_state["station_query_route"] = route_filter
+            st.session_state["station_query"] = {
+                "payload": payload,
+                "name": chosen_name,
+                "route": route_filter,
+            }
             st.session_state.pop("station_saved_msg", None)
 
-    result = st.session_state.get("station_result")
-    if result is not None:
+    station_query = st.session_state.get("station_query")
+    if station_query is not None:
+        with st.spinner("Calling CTA Train Tracker…"):
+            result = get_train_arrivals_for_station_tool.invoke(station_query["payload"])
         _render_result(result)
         if isinstance(result, dict) and result.get("station_id") and not result.get("error"):
             sid = str(result["station_id"])
             sname = (
                 result.get("station_name")
-                or st.session_state.get("station_query_name")
+                or station_query.get("name")
                 or sid
             )
             st.button(
@@ -418,7 +419,7 @@ with tab_station:
                     "station",
                     f"{sname} ({sid})",
                     sid,
-                    st.session_state.get("station_query_route"),
+                    station_query.get("route"),
                 ),
             )
         saved_msg = st.session_state.get("station_saved_msg")
@@ -518,9 +519,13 @@ with tab_nearby:
             else:
                 payload["lat"] = float(lat)  # type: ignore[arg-type]
                 payload["lng"] = float(lng)  # type: ignore[arg-type]
-            with st.spinner("Calling CTA Train Tracker for each nearby station…"):
-                result = get_all_nearby_train_arrivals_tool.invoke(payload)
-            _render_result(result)
+            st.session_state["train_nearby_query"] = payload
+
+    train_nearby_query = st.session_state.get("train_nearby_query")
+    if train_nearby_query is not None:
+        with st.spinner("Calling CTA Train Tracker for each nearby station…"):
+            result = get_all_nearby_train_arrivals_tool.invoke(train_nearby_query)
+        _render_result(result)
 
 
 # --- Tab 3: Browse a line --------------------------------------------------
@@ -570,24 +575,29 @@ with tab_browse:
                 None,
             )
             if picked and st.button("Get arrivals for selected station"):
-                with st.spinner("Calling CTA Train Tracker…"):
-                    result = get_train_arrivals_for_station_tool.invoke(
-                        {"station_id": picked["station_id"], "route": line_rt}
-                    )
-                st.session_state["browse_train_result"] = result
-                st.session_state["browse_train_pick"] = picked["station_id"]
-                st.session_state["browse_train_name"] = picked["station_name"]
-                st.session_state["browse_train_route"] = line_rt
+                st.session_state["browse_train_query"] = {
+                    "payload": {
+                        "station_id": picked["station_id"],
+                        "route": line_rt,
+                    },
+                    "pick": picked["station_id"],
+                    "name": picked["station_name"],
+                    "route": line_rt,
+                }
                 st.session_state.pop("browse_train_saved_msg", None)
 
-            br_result = st.session_state.get("browse_train_result")
-            if br_result is not None:
+            browse_train_query = st.session_state.get("browse_train_query")
+            if browse_train_query is not None:
+                with st.spinner("Calling CTA Train Tracker…"):
+                    br_result = get_train_arrivals_for_station_tool.invoke(
+                        browse_train_query["payload"]
+                    )
                 _render_result(br_result)
                 if isinstance(br_result, dict) and not br_result.get("error"):
-                    sid = st.session_state.get("browse_train_pick", "")
+                    sid = browse_train_query.get("pick", "")
                     sname = (
                         br_result.get("station_name")
-                        or st.session_state.get("browse_train_name")
+                        or browse_train_query.get("name")
                         or sid
                     )
                     st.button(
@@ -598,7 +608,7 @@ with tab_browse:
                             "browse_train",
                             f"{sname} ({sid})",
                             str(sid),
-                            st.session_state.get("browse_train_route"),
+                            browse_train_query.get("route"),
                         ),
                     )
                 saved_msg = st.session_state.get("browse_train_saved_msg")
@@ -623,7 +633,11 @@ with tab_favs:
                         if fav.get("route") else ""
                     )
                 )
+                fav_token = f"{fav['station_id']}|{fav.get('route') or ''}"
+                active_key = f"fav_train_active::{fav_token}"
                 if cols[1].button("Refresh", key=f"fav_train_get_{idx}"):
+                    st.session_state[active_key] = True
+                if st.session_state.get(active_key):
                     payload: dict[str, Any] = {"station_id": fav["station_id"]}
                     if fav.get("route"):
                         payload["route"] = fav["route"]
@@ -631,7 +645,6 @@ with tab_favs:
                         result = get_train_arrivals_for_station_tool.invoke(payload)
                     _render_result(result)
                 pending_key = "fav_train_pending_remove"
-                fav_token = f"{fav['station_id']}|{fav.get('route') or ''}"
                 if st.session_state.get(pending_key) == fav_token:
                     cols[2].button(
                         "Remove",
@@ -649,6 +662,7 @@ with tab_favs:
                     ):
                         remove_favorite(fav["station_id"], fav.get("route"))
                         st.session_state.pop(pending_key, None)
+                        st.session_state.pop(active_key, None)
                         st.rerun()
                     if confirm_cols[1].button(
                         "Cancel", key=f"fav_train_del_cancel_{idx}"
