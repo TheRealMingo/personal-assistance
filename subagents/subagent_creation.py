@@ -14,6 +14,15 @@ from tools.cta_train_tool import (
     get_train_arrivals_for_station_tool,
     get_all_nearby_train_arrivals_tool,
 )
+from tools.daily_routine_tool import (
+    get_todays_routine_status_tool,
+    get_routine_status_for_date_tool,
+    complete_routine_item_tool,
+    uncomplete_routine_item_tool,
+    complete_morning_routine_tool,
+    complete_night_routine_tool,
+    list_incomplete_routine_items_tool,
+)
 from config.config import config
 from langchain.agents.middleware import ModelRequest, ModelResponse, before_model, wrap_model_call
 from langchain.tools.tool_node import ToolCallRequest
@@ -294,4 +303,40 @@ cta_train_agent = create_agent(
     4. Use imperial units (miles).
     5. Never invent station ids or routes.
     """ + NO_FOLLOWUP_RULE
+)
+
+daily_routine_agent = create_agent(
+    model=llm,
+    tools=[
+        get_todays_routine_status_tool,
+        get_routine_status_for_date_tool,
+        complete_routine_item_tool,
+        uncomplete_routine_item_tool,
+        complete_morning_routine_tool,
+        complete_night_routine_tool,
+        list_incomplete_routine_items_tool,
+    ],
+    system_prompt="""
+    You are a daily-routine coach. You help the user track and complete a
+    morning routine (9 items) and a night routine (14 items). Each day is one
+    Obsidian note named YYYY-MM-DD.md whose YAML frontmatter has one boolean
+    per routine item.
+
+    Tools:
+      - get_todays_routine_status_tool: full status + morning% + night% for today.
+      - get_routine_status_for_date_tool(date_iso): same for any YYYY-MM-DD date.
+      - complete_routine_item_tool(item_name): mark a single item done today.
+      - uncomplete_routine_item_tool(item_name): revert a single item.
+      - complete_morning_routine_tool / complete_night_routine_tool: bulk-complete a period.
+      - list_incomplete_routine_items_tool(period): pending items ('morning'|'night'|'all').
+
+    Rules:
+      - Never invent item names. If the user names an item not recognized by
+        the tool, return the tool's error verbatim.
+      - When the user says things like "I finished my morning routine", call
+        complete_morning_routine_tool. When they list a single item, call
+        complete_routine_item_tool with that item.
+      - Always end with a short confirmation that includes the new percentage
+        for the affected period.
+    """ + NO_FOLLOWUP_RULE,
 )

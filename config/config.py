@@ -15,6 +15,7 @@ config = {
     "obsidian_vault_exercise_path": os.getenv("OBSIDIAN_VAULT_EXERCISE_PATH", "."),
     "obsidian_vault_weight_path": os.getenv("OBSIDIAN_VAULT_WEIGHT_PATH", "."),
     "obsidian_vault_task_list_path": os.getenv("OBSIDIAN_VAULT_TASK_LIST_PATH", "."),
+    "obsidian_vault_daily_routine_path": os.getenv("OBSIDIAN_VAULT_DAILY_ROUTINE_PATH", "."),
     "google_maps_api_key": os.getenv("GOOGLE_MAPS_API_KEY"),
     "wolfram_alpha_spoken_api_key": os.getenv("WOLFRAM_ALPHA_SPOKEN_API_KEY"),
     "wolfram_alpha_llm_api_key": os.getenv("WOLFRAM_ALPHA_LLM_API_KEY"),

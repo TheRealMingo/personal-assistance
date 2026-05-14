@@ -20,6 +20,7 @@ try:
 except ImportError:  # graceful fallback if not installed yet
     streamlit_geolocation = None  # type: ignore[assignment]
 
+from utils.browser_geolocation import render_browser_location_widget
 from tools.cta_bus_tool import (
     DATA_DIR,
     cta_get_directions,
@@ -333,35 +334,7 @@ with tab_nearby:
     )
 
     if loc_mode == "Use my browser location":
-        if streamlit_geolocation is None:
-            st.warning("Install `streamlit-geolocation` to use browser location.")
-        else:
-            st.caption(
-                "Click the location button below and approve the browser "
-                "permission prompt. The coordinates will be cached for this "
-                "session."
-            )
-            geo = streamlit_geolocation()
-            if (
-                isinstance(geo, dict)
-                and geo.get("latitude") is not None
-                and geo.get("longitude") is not None
-            ):
-                st.session_state["browser_geo"] = {
-                    "lat": float(geo["latitude"]),
-                    "lng": float(geo["longitude"]),
-                    "accuracy": geo.get("accuracy"),
-                }
-            cached = st.session_state.get("browser_geo")
-            if cached:
-                acc = cached.get("accuracy")
-                acc_txt = f" (±{acc:.0f} m)" if isinstance(acc, (int, float)) else ""
-                st.success(
-                    f"Using browser location: {cached['lat']:.5f}, "
-                    f"{cached['lng']:.5f}{acc_txt}"
-                )
-            else:
-                st.info("No browser location captured yet.")
+        render_browser_location_widget(key_prefix="bus_nearby")
 
     with st.form("nearby_form"):
         c1, c2 = st.columns(2)
@@ -561,8 +534,15 @@ with tab_favs:
                 )
                 fav_token = f"{fav['stop_id']}|{fav.get('route') or ''}"
                 active_key = f"fav_active::{fav_token}"
-                if cols[1].button("Refresh", key=f"fav_get_{idx}"):
-                    st.session_state[active_key] = True
+                showing = bool(st.session_state.get(active_key))
+                if showing:
+                    if cols[1].button("Hide", key=f"fav_hide_{idx}"):
+                        st.session_state[active_key] = False
+                        st.rerun()
+                else:
+                    if cols[1].button("Refresh", key=f"fav_get_{idx}"):
+                        st.session_state[active_key] = True
+                        st.rerun()
                 if st.session_state.get(active_key):
                     with st.spinner("Calling CTA Bus Tracker…"):
                         result = get_bus_predictions_for_stop_tool.invoke(

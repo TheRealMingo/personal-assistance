@@ -14,6 +14,7 @@ streamlit
 streamlit-calendar
 streamlit-autorefresh
 streamlit-geolocation
+streamlit-js-eval
 googlemaps
 google-api-python-client
 google-auth-oauthlib

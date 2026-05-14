@@ -190,44 +190,79 @@ with col_info:
 
 # --- Quick add -------------------------------------------------------------
 with st.expander("➕ Add a new task", expanded=False):
-    with st.form("task_add_form", clear_on_submit=True):
-        c1, c2 = st.columns(2)
-        with c1:
-            new_task = st.text_input("Task")
-            new_project = st.text_input("Project (optional)")
-        with c2:
-            new_due = st.date_input("Due date (optional)", value=None)
-            new_priority = st.number_input(
-                "Priority (0 = highest, 5 = default)",
-                min_value=0,
-                max_value=10,
-                value=5,
-                step=1,
+    # Get all existing projects
+    existing_projects = sorted(
+        [p for p in df["Project"].unique() if p and str(p).strip()]
+    )
+    project_options = list(existing_projects) + ["Other"]
+
+    # Note: We use individual widgets + a regular button (not st.form) so the
+    # "Other" text input can appear reactively when selected.
+    c1, c2 = st.columns(2)
+    with c1:
+        new_task = st.text_input("Task", key="task_add_task")
+        selected_project = st.selectbox(
+            "Project (optional)",
+            options=project_options,
+            index=None,
+            placeholder="Select a project or choose Other",
+            key="task_add_project_select",
+        )
+        new_project = ""
+        if selected_project == "Other":
+            new_project = st.text_input(
+                "New project name", key="task_add_new_project"
             )
-        submitted = st.form_submit_button("Add task")
-        if submitted:
-            if not new_task.strip():
-                st.error("Task description is required.")
+    with c2:
+        new_due = st.date_input(
+            "Due date (optional)", value=None, key="task_add_due"
+        )
+        new_priority = st.number_input(
+            "Priority (0 = highest, 5 = default)",
+            min_value=0,
+            max_value=5,
+            value=5,
+            step=1,
+            key="task_add_priority",
+        )
+
+    if st.button("Add task", type="primary", key="task_add_submit"):
+        if not new_task.strip():
+            st.error("Task description is required.")
+        elif selected_project == "Other" and not new_project.strip():
+            st.error("Please enter a project name when selecting 'Other'.")
+        else:
+            payload: dict[str, Any] = {"task": new_task.strip()}
+            if selected_project and selected_project != "Other":
+                payload["project"] = selected_project.strip()
+            elif new_project.strip():
+                payload["project"] = new_project.strip()
+
+            if new_due:
+                payload["due_date"] = (
+                    datetime.combine(new_due, datetime.min.time())
+                    .strftime("%Y-%m-%dT%H:%M:%S")
+                )
+            payload["priority"] = int(new_priority)
+            try:
+                response = add_task_tool.invoke(payload)
+            except Exception as exc:  # noqa: BLE001
+                logging.exception("Failed to add task")
+                st.error(f"Failed to add task: {exc}")
             else:
-                payload: dict[str, Any] = {"task": new_task.strip()}
-                if new_project.strip():
-                    payload["project"] = new_project.strip()
-                if new_due:
-                    payload["due_date"] = (
-                        datetime.combine(new_due, datetime.min.time())
-                        .strftime("%Y-%m-%dT%H:%M:%S")
-                    )
-                payload["priority"] = int(new_priority)
-                try:
-                    response = add_task_tool.invoke(payload)
-                except Exception as exc:  # noqa: BLE001
-                    logging.exception("Failed to add task")
-                    st.error(f"Failed to add task: {exc}")
-                else:
-                    st.success("Task added!")
-                    st.markdown(response)
-                    load_tasks.clear()
-                    st.rerun()
+                st.success("Task added!")
+                st.markdown(response)
+                # Clear the inputs by removing their session state keys.
+                for k in (
+                    "task_add_task",
+                    "task_add_project_select",
+                    "task_add_new_project",
+                    "task_add_due",
+                    "task_add_priority",
+                ):
+                    st.session_state.pop(k, None)
+                load_tasks.clear()
+                st.rerun()
 
 if df.empty:
     st.info("No tasks found. Add one above to get started!")
