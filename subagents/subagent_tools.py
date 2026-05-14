@@ -1,4 +1,4 @@
-from subagents.subagent_creation import weather_agent, exercise_agent, date_and_time_agent, stem_agent, coder_agent, task_manager_agent, email_agent
+from subagents.subagent_creation import weather_agent, exercise_agent, date_and_time_agent, stem_agent, coder_agent, task_manager_agent, email_agent, cta_bus_agent, cta_train_agent
 
 from langchain.tools import tool
 
@@ -114,4 +114,50 @@ def email_agent_tool(prompt):
     """
     logging.info(f"Email agent called with prompt: {prompt}")
     result = email_agent.invoke({"messages": [{"role": "user", "content": prompt},]},)
+    return result["messages"][-1].content
+
+
+@tool
+def cta_bus_agent_tool(prompt: str) -> str:
+    """
+    CTA Bus Agent handles all Chicago CTA bus inquiries, including:
+        - Predicted bus arrival/departure times for a specific bus stop
+          (by stop id, or by route + direction + stop name)
+        - Predicted bus arrival times for stops near a lat/lng or address
+          along a given CTA route
+
+    Only handles CTA buses (not CTA trains, not other transit agencies).
+
+    Args:
+        - prompt: the exact prompt from the user
+
+    Returns:
+        - bus prediction information related to the user prompt
+    """
+    logging.info(f"CTA Bus agent called with prompt: {prompt}")
+    result = cta_bus_agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    return result["messages"][-1].content
+
+
+@tool
+def cta_train_agent_tool(prompt: str) -> str:
+    """
+    CTA Train Agent handles all Chicago CTA 'L' train (rail) inquiries, including:
+        - Predicted train arrival times for a specific station
+          (by station id / mapid, or by station name)
+        - Predicted train arrival times for all stations within a radius of
+          a lat/lng or address ("trains near me")
+        - Filtering arrivals by line (Red, Blue, Green, Brown, Purple,
+          Purple Express, Yellow, Pink, Orange)
+
+    Only handles CTA trains (not CTA buses, not Metra, not other transit agencies).
+
+    Args:
+        - prompt: the exact prompt from the user
+
+    Returns:
+        - train arrival information related to the user prompt
+    """
+    logging.info(f"CTA Train agent called with prompt: {prompt}")
+    result = cta_train_agent.invoke({"messages": [{"role": "user", "content": prompt}]})
     return result["messages"][-1].content

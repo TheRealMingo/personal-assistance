@@ -11,6 +11,9 @@ pyyaml
 pytz
 pathlib
 streamlit
+streamlit-calendar
+streamlit-autorefresh
+streamlit-geolocation
 googlemaps
 google-api-python-client
 google-auth-oauthlib

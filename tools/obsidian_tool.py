@@ -281,3 +281,52 @@ def complete_a_task_tool(task: str) -> str:
 
     logging.info("Successfully completed task")
     return f"Successfully updated task in Obsidian vault: {task_file}"
+
+@tool
+def uncomplete_a_task_tool(task: str) -> str:
+    """
+    Mark a previously completed task as not completed by unchecking the
+    completed checkbox.
+
+    Args:
+        task: The task to be marked as not completed.
+
+    Returns:
+        A confirmation on whether the task was marked as not completed.
+    """
+    logging.info("Uncompleting a task in the Obsidian vault ...")
+    task_file = config["obsidian_vault_task_list_path"] + f"/{task.title()}.md"
+    content = None
+    try:
+        with open(task_file, "r") as file:
+            try:
+                content = "\n".join(file.readlines()[1:-1]) #Removes the first and last "---"
+                content = safe_load(content)
+                if content is None:
+                    logging.error(f"No content for task: {task}")
+                    return "Error reading task"
+                if "Completed" in content and bool(content["Completed"]) is False:
+                    logging.info("Task is already not completed.")
+                    return "Task is already not completed."
+            except Exception as e:
+                logging.error(f"Error reading task: {task}\n Error {e}")
+                return "Error reading task"
+
+        content["Completed"] = False
+        if "Date Completed" in content:
+            del content["Date Completed"]
+        task_note_content = dump(content, default_flow_style=False, sort_keys=False, indent=2)
+        task_note_content = f"""---\n{task_note_content}---"""
+
+        with open(task_file, "w") as f:
+            try:
+                f.write(task_note_content)
+            except Exception as e:
+                logging.error(f"Error updating task: {task}\n Error {e}")
+                return "Error updating task"
+    except Exception as e:
+        logging.error(f"Error attempting to mark task '{task}' as not completed.\n Error {e}")
+        return "Error attempting to mark task as not completed."
+
+    logging.info("Successfully uncompleted task")
+    return f"Successfully updated task in Obsidian vault: {task_file}"
