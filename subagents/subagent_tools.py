@@ -1,4 +1,4 @@
-from subagents.subagent_creation import weather_agent, exercise_agent, date_and_time_agent, stem_agent, coder_agent, task_manager_agent, email_agent, cta_bus_agent, cta_train_agent
+from subagents.subagent_creation import weather_agent, exercise_agent, date_and_time_agent, stem_agent, coder_agent, task_manager_agent, email_agent, cta_bus_agent, cta_train_agent, daily_routine_agent
 
 from langchain.tools import tool
 
@@ -160,4 +160,24 @@ def cta_train_agent_tool(prompt: str) -> str:
     """
     logging.info(f"CTA Train agent called with prompt: {prompt}")
     result = cta_train_agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    return result["messages"][-1].content
+
+@tool
+def daily_routine_agent_tool(prompt: str) -> str:
+    """
+    Daily Routine agent tracks the user's morning (9 items) and night
+    (14 items) routines, stored as one Obsidian note per day. It can read
+    today's status, complete or uncomplete individual items, bulk-complete
+    a whole period, and list pending items.
+
+    Args:
+        - prompt: the exact prompt from the user
+
+    Returns:
+        - confirmation or status text related to the user's routine
+    """
+    logging.info(f"Daily Routine agent called with prompt: {prompt}")
+    result = daily_routine_agent.invoke(
+        {"messages": [{"role": "user", "content": prompt}]}
+    )
     return result["messages"][-1].content
