@@ -244,21 +244,21 @@ with tab_stop:
             ).strip() or None
             submitted = st.form_submit_button("Get predictions")
         if submitted and stop_id.strip():
-            with st.spinner("Calling CTA Bus Tracker…"):
-                result = get_bus_predictions_for_stop_tool.invoke(
-                    {"stop_id": stop_id.strip(), "route": route_filter}
-                )
-            st.session_state["byid_result"] = result
-            st.session_state["byid_route_filter"] = route_filter
-            st.session_state["byid_query_stop"] = stop_id.strip()
+            st.session_state["byid_query"] = {
+                "payload": {"stop_id": stop_id.strip(), "route": route_filter},
+                "stop": stop_id.strip(),
+                "route_filter": route_filter,
+            }
             st.session_state.pop("byid_saved_msg", None)
 
-        result = st.session_state.get("byid_result")
-        if result is not None:
+        query = st.session_state.get("byid_query")
+        if query is not None:
+            with st.spinner("Calling CTA Bus Tracker…"):
+                result = get_bus_predictions_for_stop_tool.invoke(query["payload"])
             _render_result(result)
             if isinstance(result, dict) and result.get("stop_id") and not result.get("error"):
                 rid = str(result["stop_id"])
-                rname = result.get("stop_name") or st.session_state.get("byid_query_stop") or rid
+                rname = result.get("stop_name") or query.get("stop") or rid
                 st.button(
                     "⭐ Save as favorite",
                     key="fav_save_byid",
@@ -267,7 +267,7 @@ with tab_stop:
                         "byid",
                         f"{rname} ({rid})",
                         rid,
-                        st.session_state.get("byid_route_filter"),
+                        query.get("route_filter"),
                     ),
                 )
             saved_msg = st.session_state.get("byid_saved_msg")
@@ -299,15 +299,17 @@ with tab_stop:
             if not (route and direction and stop_name):
                 st.error("Route, direction, and stop name are all required.")
             else:
-                with st.spinner("Calling CTA Bus Tracker…"):
-                    result = get_bus_predictions_for_stop_tool.invoke(
-                        {
-                            "route": route,
-                            "direction": direction,
-                            "stop_name": stop_name,
-                        }
-                    )
-                _render_result(result)
+                st.session_state["byrdn_query"] = {
+                    "route": route,
+                    "direction": direction,
+                    "stop_name": stop_name,
+                }
+
+        byrdn_query = st.session_state.get("byrdn_query")
+        if byrdn_query is not None:
+            with st.spinner("Calling CTA Bus Tracker…"):
+                result = get_bus_predictions_for_stop_tool.invoke(byrdn_query)
+            _render_result(result)
 
 # --- Tab 2: Near location --------------------------------------------------
 with tab_nearby:
@@ -429,8 +431,10 @@ with tab_nearby:
                 else:
                     payload["lat"] = float(lat)  # type: ignore[arg-type]
                     payload["lng"] = float(lng)  # type: ignore[arg-type]
-                with st.spinner("Calling CTA Bus Tracker…"):
-                    result = get_bus_predictions_near_location_tool.invoke(payload)
+                st.session_state["nearby_query"] = {
+                    "tool": "route",
+                    "payload": payload,
+                }
             else:
                 payload = {"radius_miles": float(radius)}
                 if address:
@@ -438,12 +442,27 @@ with tab_nearby:
                 else:
                     payload["lat"] = float(lat)  # type: ignore[arg-type]
                     payload["lng"] = float(lng)  # type: ignore[arg-type]
-                with st.spinner(
-                    "Searching all CTA routes near your location… "
-                    "(first call of the day may take ~30\u201360s)"
-                ):
-                    result = get_all_nearby_bus_predictions_tool.invoke(payload)
-            _render_result(result)
+                st.session_state["nearby_query"] = {
+                    "tool": "all",
+                    "payload": payload,
+                }
+
+    nearby_query = st.session_state.get("nearby_query")
+    if nearby_query is not None:
+        if nearby_query["tool"] == "route":
+            with st.spinner("Calling CTA Bus Tracker…"):
+                result = get_bus_predictions_near_location_tool.invoke(
+                    nearby_query["payload"]
+                )
+        else:
+            with st.spinner(
+                "Searching all CTA routes near your location… "
+                "(first call of the day may take ~30\u201360s)"
+            ):
+                result = get_all_nearby_bus_predictions_tool.invoke(
+                    nearby_query["payload"]
+                )
+        _render_result(result)
 
 # --- Tab 3: Browse route to discover stops --------------------------------
 with tab_browse:
@@ -494,20 +513,22 @@ with tab_browse:
                         + stops_df.set_index(stops_df['Stop ID'].astype(str)).loc[sid, 'Stop Name'],
                     )
                     if st.button("Get predictions for selected stop"):
-                        with st.spinner("Calling CTA Bus Tracker…"):
-                            result = get_bus_predictions_for_stop_tool.invoke(
-                                {"stop_id": str(pick), "route": chosen_route}
-                            )
-                        st.session_state["browse_result"] = result
-                        st.session_state["browse_pick"] = str(pick)
-                        st.session_state["browse_route"] = chosen_route
+                        st.session_state["browse_query"] = {
+                            "payload": {"stop_id": str(pick), "route": chosen_route},
+                            "pick": str(pick),
+                            "route": chosen_route,
+                        }
                         st.session_state.pop("browse_saved_msg", None)
 
-                    result = st.session_state.get("browse_result")
-                    if result is not None:
+                    browse_query = st.session_state.get("browse_query")
+                    if browse_query is not None:
+                        with st.spinner("Calling CTA Bus Tracker…"):
+                            result = get_bus_predictions_for_stop_tool.invoke(
+                                browse_query["payload"]
+                            )
                         _render_result(result)
                         if isinstance(result, dict) and not result.get("error"):
-                            rid = st.session_state.get("browse_pick", str(pick))
+                            rid = browse_query.get("pick", str(pick))
                             rname = result.get("stop_name") or rid
                             st.button(
                                 "⭐ Save as favorite",
@@ -517,7 +538,7 @@ with tab_browse:
                                     "browse",
                                     f"{rname} ({rid})",
                                     str(rid),
-                                    st.session_state.get("browse_route"),
+                                    browse_query.get("route"),
                                 ),
                             )
                         saved_msg = st.session_state.get("browse_saved_msg")
@@ -538,14 +559,17 @@ with tab_favs:
                     f"**{fav['label']}**  \nStop ID: `{fav['stop_id']}`"
                     + (f" · Route: `{fav['route']}`" if fav.get("route") else "")
                 )
+                fav_token = f"{fav['stop_id']}|{fav.get('route') or ''}"
+                active_key = f"fav_active::{fav_token}"
                 if cols[1].button("Refresh", key=f"fav_get_{idx}"):
+                    st.session_state[active_key] = True
+                if st.session_state.get(active_key):
                     with st.spinner("Calling CTA Bus Tracker…"):
                         result = get_bus_predictions_for_stop_tool.invoke(
                             {"stop_id": fav["stop_id"], "route": fav.get("route")}
                         )
                     _render_result(result)
                 pending_key = "fav_pending_remove"
-                fav_token = f"{fav['stop_id']}|{fav.get('route') or ''}"
                 if st.session_state.get(pending_key) == fav_token:
                     cols[2].button(
                         "Remove",
@@ -561,6 +585,7 @@ with tab_favs:
                     ):
                         remove_favorite(fav["stop_id"], fav.get("route"))
                         st.session_state.pop(pending_key, None)
+                        st.session_state.pop(active_key, None)
                         st.rerun()
                     if confirm_cols[1].button("Cancel", key=f"fav_del_cancel_{idx}"):
                         st.session_state.pop(pending_key, None)
