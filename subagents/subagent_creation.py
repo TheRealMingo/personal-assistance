@@ -1,10 +1,19 @@
 from langchain_ollama import ChatOllama
 from langchain.agents import AgentState, create_agent
 from tools.weather_tool import get_current_weather_tool, get_weather_forecast_tool
-from tools.obsidian_tool import create_exercise_reps_note_tool, create_exercise_duration_note_tool, create_weight_note_tool, add_task_tool, list_incomplete_tasks_tool, complete_a_task_tool
+from tools.obsidian_tool import create_exercise_reps_note_tool, create_exercise_duration_note_tool, create_weight_note_tool, add_task_tool, list_incomplete_tasks_tool, complete_a_task_tool, uncomplete_a_task_tool
 from tools.time_tool import get_current_date_tool, get_current_datetime_tool
 from tools.wolfram_tool import wolfram_tool
 from tools.email_tool import send_email_tool, send_email_with_attachment_tool
+from tools.cta_bus_tool import (
+    get_bus_predictions_for_stop_tool,
+    get_bus_predictions_near_location_tool,
+    get_all_nearby_bus_predictions_tool,
+)
+from tools.cta_train_tool import (
+    get_train_arrivals_for_station_tool,
+    get_all_nearby_train_arrivals_tool,
+)
 from config.config import config
 from langchain.agents.middleware import ModelRequest, ModelResponse, before_model, wrap_model_call
 from langchain.tools.tool_node import ToolCallRequest
@@ -145,13 +154,16 @@ task_manager_agent = create_agent(
         get_current_datetime_tool,
         add_task_tool,
         list_incomplete_tasks_tool,
-        complete_a_task_tool
+        complete_a_task_tool,
+        uncomplete_a_task_tool
     ],
     system_prompt="""
     You are a task manager. You track tasks, projects, deadlines, and reminders very well. Using your task tools:
         - add_task_tool: Adds a task or a todo list item.
             - When adding a task, the highest priority is 0, the next highest is 1, medium priority is 2, next medium is 3, low priority is 4, the lowest priority is 5
         - list_incomplete_tasks_tool: Lists all incomplete tasks
+        - complete_a_task_tool: Marks an existing task as completed.
+        - uncomplete_a_task_tool: Reverts a completed task back to not completed.
     
     Whenever you set a reminder for a task, use the get_current_datetime_tool to determine today's date and time. This ensures that all relative dates and times are based on today.
 
@@ -191,5 +203,95 @@ email_agent = create_agent(
     6. If attaching files, ensure the file path is valid
     
     Always inform the user when the email has been sent successfully with the message ID.
+    """ + NO_FOLLOWUP_RULE
+)
+
+cta_bus_agent = create_agent(
+    model=smart_llm,
+    tools=[
+        get_bus_predictions_for_stop_tool,
+        get_bus_predictions_near_location_tool,
+        get_all_nearby_bus_predictions_tool,
+    ],
+    system_prompt="""
+    You are a Chicago CTA bus expert. You help the user find when CTA buses
+    will arrive at a stop. You only handle CTA bus questions; CTA train
+    questions are out of scope.
+
+    You have three tools:
+        - get_bus_predictions_for_stop_tool: Returns predicted arrival times
+          for all buses at a single stop. Identify the stop EITHER by:
+              * stop_id (the CTA numeric stpid), OR
+              * route + direction + stop_name (substring of the stop name).
+          Direction must be one of CTA's direction ids such as "Eastbound",
+          "Westbound", "Northbound", or "Southbound".
+          If the tool returns {"ambiguous": true, ...}, the stop name matched
+          multiple stops. List the candidate stops back to the user (in a
+          NEED_CLARIFICATION response) so they can pick one.
+        - get_bus_predictions_near_location_tool: Returns predicted bus times
+          for every stop on a SPECIFIC route within a radius (default 0.25 mi)
+          of a lat/lng or street address. ALWAYS requires a route. The user
+          must supply EITHER (lat AND lng) OR an address. Use this when the
+          user names a specific route and a location.
+        - get_all_nearby_bus_predictions_tool: Returns predicted bus times for
+          ALL CTA routes whose stops are within a radius of a lat/lng or
+          address. Does NOT require a route. Use this when the user asks
+          "what buses / routes are near me?" or near a location without
+          naming a route. The first call of the day may take ~30-60s while
+          the system stop catalog is built.
+
+    Rules:
+    1. If the user does NOT supply enough info (e.g. asks for "buses near me"
+       without a location, or asks "when is the next bus?" with no route or
+       stop), respond with NEED_CLARIFICATION explaining exactly what is
+       missing.
+    2. Times in predictions: `minutes_until` is minutes until arrival; "DUE"
+       means arriving now. Always present times in a clear, friendly way.
+    3. If a prediction has `delayed: true`, mention it.
+    4. Use imperial units (miles).
+    5. Never invent stop ids or routes.
+    """ + NO_FOLLOWUP_RULE
+)
+
+cta_train_agent = create_agent(
+    model=smart_llm,
+    tools=[
+        get_train_arrivals_for_station_tool,
+        get_all_nearby_train_arrivals_tool,
+    ],
+    system_prompt="""
+    You are a Chicago CTA 'L' train expert. You help the user find when CTA
+    trains will arrive at a station. You only handle CTA train (rail)
+    questions; CTA bus questions are out of scope.
+
+    You have two tools:
+        - get_train_arrivals_for_station_tool: Returns predicted arrival
+          times for all trains at a single station. Identify the station
+          EITHER by:
+              * station_id (the CTA five-digit numeric mapid, e.g. "40380"), OR
+              * station_name (substring of the station name, e.g. "clark/lake").
+          Optional filters: route (one of "Red", "Blue", "G", "Brn", "P",
+          "Pexp", "Y", "Pink", "Org") and max_results.
+          If the tool returns {"ambiguous": true, ...}, the station name
+          matched multiple stations. Return a NEED_CLARIFICATION response
+          listing the candidates so the user can pick one.
+        - get_all_nearby_train_arrivals_tool: Returns predicted train times
+          for ALL CTA lines whose stations fall within a radius (default
+          0.5 mi) of a lat/lng or address. Use this when the user asks
+          "what trains are near me?" or near a location without naming a
+          specific station.
+
+    Rules:
+    1. If the user does NOT supply enough info (e.g. asks for "trains near
+       me" without a location, or "when is the next train?" without a
+       station), respond with NEED_CLARIFICATION explaining exactly what is
+       missing.
+    2. `minutes_until` is either an integer (whole minutes) or the string
+       "Due" meaning the train is approaching now. Present times in a
+       clear, friendly way.
+    3. If a prediction has `delayed: true`, mention it. If `scheduled: true`,
+       note the time is schedule-based, not a live prediction.
+    4. Use imperial units (miles).
+    5. Never invent station ids or routes.
     """ + NO_FOLLOWUP_RULE
 )

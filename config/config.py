@@ -1,7 +1,7 @@
 import os
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 config = {
     "assistant-name": os.getenv("ASSISTANT_NAME", "Mingo's Personal Assistant"),
@@ -20,4 +20,6 @@ config = {
     "wolfram_alpha_llm_api_key": os.getenv("WOLFRAM_ALPHA_LLM_API_KEY"),
     "gmail_smtp_email": os.getenv("GMAIL_SMTP_EMAIL"),
     "gmail_smtp_app_password": os.getenv("GMAIL_SMTP_APP_PASSWORD"),
+    "cta_bus_tracker_api_key": os.getenv("CTA_BUS_TRACKER_API_KEY"),
+    "cta_train_tracker_api_key": os.getenv("CTA_TRAIN_TRACKER_API_KEY"),
 }

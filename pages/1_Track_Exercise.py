@@ -53,7 +53,7 @@ def _build_prompt(
 st.title("Track Exercise")
 
 if st.button("Back to Assistant"):
-    st.switch_page("app.py")
+    st.switch_page("0_Personal_Assistant.py")
 
 OTHER_OPTION = "Other"
 exercises = list_exercises() + [OTHER_OPTION]

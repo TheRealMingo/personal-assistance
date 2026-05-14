@@ -32,10 +32,6 @@ def render_agent_message(message_content: str, download_key: str, file_name: str
 st.title(config["assistant-name"])
 # conversation_start = invoke_agent("Without calling any tools, tell me what your capabilities are and greet me nicely!")
 
-if st.button("Track Exercise"):
-    st.switch_page("pages/track_exercise.py")
-
-
 
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
