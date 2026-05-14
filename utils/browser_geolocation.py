@@ -53,10 +53,10 @@ def _warn_if_insecure(key_prefix: str) -> None:
         is_secure = None
     if is_secure is False:
         st.warning(
-            "📍 This page is not served over HTTPS, so mobile browsers will "
+            "📍 This page is not served over HTTPS, so browsers will "
             "block the location request. Open the app on `localhost` or "
             "behind HTTPS (e.g. via Cloudflare Tunnel / ngrok / a reverse "
-            "proxy) to use the location button on your phone."
+            "proxy) to use the location button."
         )
 
 

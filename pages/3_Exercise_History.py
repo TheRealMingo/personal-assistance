@@ -167,7 +167,7 @@ def _prefill_track_exercise(row: pd.Series) -> None:
         float(row["Weight (lbs)"])
     )
 
-    st.switch_page("pages/1_Track_Exercise.py")
+    st.switch_page("pages/4_Track_Exercise.py")
 
 
 # ---------------------------------------------------------------------------
@@ -227,14 +227,54 @@ if name_search.strip():
 # --- Table -----------------------------------------------------------------
 st.subheader("All Exercises")
 
-if filtered.empty:
+# Week-scoped views. Weeks start on Sunday: Python's weekday() is Mon=0..Sun=6,
+# so days since the most recent Sunday is (weekday() + 1) % 7.
+today = date.today()
+current_week_start = today - timedelta(days=(today.weekday() + 1) % 7)
+previous_week_start = current_week_start - timedelta(days=7)
+previous_week_end = current_week_start  # exclusive upper bound
+
+view_choice = st.radio(
+    "View",
+    options=["All", "This week (Sun–Sat)", "Last week (Sun–Sat)"],
+    horizontal=True,
+    key="hist_view_choice",
+    help="Weeks start on Sunday.",
+)
+
+view_df = filtered.copy()
+if view_choice != "All":
+    view_df = view_df.dropna(subset=["Date"])
+    if view_choice == "This week (Sun–Sat)":
+        start_ts = pd.Timestamp(current_week_start)
+        end_ts = pd.Timestamp(current_week_start + timedelta(days=7))
+        st.caption(
+            f"Showing exercises from **{current_week_start:%a %Y-%m-%d}** "
+            f"through **{(current_week_start + timedelta(days=6)):%a %Y-%m-%d}**."
+        )
+    else:
+        start_ts = pd.Timestamp(previous_week_start)
+        end_ts = pd.Timestamp(previous_week_end)
+        st.caption(
+            f"Showing exercises from **{previous_week_start:%a %Y-%m-%d}** "
+            f"through **{(previous_week_start + timedelta(days=6)):%a %Y-%m-%d}**."
+        )
+    view_df = view_df[(view_df["Date"] >= start_ts) & (view_df["Date"] < end_ts)]
+
+editor_key = {
+    "All": "hist_table_editor",
+    "This week (Sun–Sat)": "hist_table_editor_this_week",
+    "Last week (Sun–Sat)": "hist_table_editor_last_week",
+}[view_choice]
+
+if view_df.empty:
     st.info("No exercises match the current filters.")
 else:
     st.caption(
         "Click a column header to sort. Select a row to repeat that exercise."
     )
 
-    table_df = filtered.drop(columns=["File"]).reset_index(drop=True).copy()
+    table_df = view_df.drop(columns=["File"]).reset_index(drop=True).copy()
     table_df.insert(0, "Repeat", False)
 
     edited_df = st.data_editor(
@@ -256,12 +296,12 @@ else:
                 "Weight (lbs)", format="%.1f"
             ),
         },
-        key="hist_table_editor",
+        key=editor_key,
     )
 
     repeat_rows = edited_df.index[edited_df["Repeat"]].tolist()
     if repeat_rows:
-        _prefill_track_exercise(filtered.reset_index(drop=True).iloc[repeat_rows[0]])
+        _prefill_track_exercise(view_df.reset_index(drop=True).iloc[repeat_rows[0]])
 
 # --- Trend chart -----------------------------------------------------------
 st.subheader("Progress Over Time")
@@ -301,15 +341,10 @@ else:
             start = end - timedelta(days=days)
 
     chart_exercise_options = sorted(charted["Exercise"].unique().tolist())
-    default_chart_exercises = (
-        selected_exercises
-        if selected_exercises
-        else chart_exercise_options[: min(3, len(chart_exercise_options))]
-    )
     chart_exercises = st.multiselect(
         "Exercises to plot",
         chart_exercise_options,
-        default=default_chart_exercises,
+        default=[],
         key="hist_chart_exercises",
     )
 
