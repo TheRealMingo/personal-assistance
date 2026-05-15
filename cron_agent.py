@@ -36,7 +36,9 @@ logging.basicConfig(
 llm = ChatOllama(
     model=config["sub_agent_smart_model"],
     temperature=0,
-    keep_alive="0m",
+    keep_alive=(
+        config["sub_agents_keep_alive"] if config["sub_agents_has_keep_alive"] else "0m"
+    ),
 )
 
 BUS_FAVORITES_PATH = BUS_DATA_DIR / "cta_favorite_stops.json"
