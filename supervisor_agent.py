@@ -24,7 +24,7 @@ llm = ChatOllama(
     validate_model_on_init=True,
     temperature=0,
     keep_alive="10m",
-    reasoning=False # TODO: Make configurable
+    reasoning=True # TODO: Make configurable
 )
 
 SYSTEM_PROMPT = """
@@ -64,6 +64,13 @@ Loop-prevention rules (follow strictly):
 
 MAX_DUPLICATE_TOOL_CALLS = 1  # block on the 2nd identical call
 RECURSION_LIMIT = 15
+
+# Number of recent messages (in addition to the very first message) the
+# supervisor keeps in its context window per turn. Configurable via env.
+CONVERSATION_HISTORY_LIMIT = max(1, int(config["conversation_history_limit"]))
+
+# Default LangGraph thread used by non-UI callers (e.g. cron_agent).
+DEFAULT_THREAD_ID = "1"
 
 # Per-thread tool-call history for duplicate detection.
 _tool_call_history: dict[str, list[tuple[str, str]]] = {}
@@ -131,17 +138,33 @@ def monitor_model(request: ModelRequest, handler: Callable[[ModelRequest], Model
 
 @before_model
 def trim_messages(state: AgentState, runtime: LangchainRuntime) -> dict[str, Any] | None:
-    """Keep only the last few messages to fit context window."""
+    """Keep only the last few messages to fit context window.
+
+    The number of recent messages retained is controlled by
+    ``CONVERSATION_HISTORY_LIMIT`` (env: ``CONVERSATION_HISTORY_LIMIT``). The
+    very first message is always preserved so the system/user intent is not
+    lost.
+    """
     messages = state["messages"]
 
-    if len(messages) <= 6:
-        logging.info(f"Returning all messages. Message can is count is just {len(messages)}")
+    # +1 because we always also keep the very first message.
+    if len(messages) <= CONVERSATION_HISTORY_LIMIT + 1:
+        logging.info(
+            f"Returning all messages. Message count is {len(messages)} <= limit "
+            f"{CONVERSATION_HISTORY_LIMIT + 1}"
+        )
         return None  # No changes needed
 
     first_msg = messages[0]
-    recent_messages = messages[-5:] if len(messages) % 2 == 0 else messages[-6:]
+    # Keep an even-length tail when possible so a tool/result pair isn't split.
+    tail_size = CONVERSATION_HISTORY_LIMIT
+    if len(messages) % 2 != 0 and tail_size % 2 == 0:
+        tail_size += 1
+    recent_messages = messages[-tail_size:]
     new_messages = [first_msg] + recent_messages
-    logging.info(f"Deleting messages. Only remembering the last 6 messages:\n {new_messages}")
+    logging.info(
+        f"Trimming messages. Keeping first + last {tail_size}:\n {new_messages}"
+    )
 
     return {
         "messages": [
@@ -149,6 +172,8 @@ def trim_messages(state: AgentState, runtime: LangchainRuntime) -> dict[str, Any
             *new_messages
         ]
     }
+
+agent_checkpointer = InMemorySaver()
 
 agent = create_agent(
     model=llm,
@@ -164,10 +189,31 @@ agent = create_agent(
            daily_routine_agent_tool],
     middleware=[monitor_tool, dedupe_tool, monitor_model, trim_messages],
     system_prompt=SYSTEM_PROMPT, 
-    checkpointer=InMemorySaver(),)
+    checkpointer=agent_checkpointer,)
 
 
-def invoke_agent(input_txt: str, role: str = "user"):
+def reset_thread(thread_id: str) -> None:
+    """Drop all checkpointed state for ``thread_id``.
+
+    Used when a chat session has been idle past the configured timeout so the
+    next interaction begins with a clean conversation.
+    """
+    _tool_call_history.pop(thread_id, None)
+    deleter = getattr(agent_checkpointer, "delete_thread", None)
+    if callable(deleter):
+        try:
+            deleter(thread_id)
+            return
+        except Exception:  # noqa: BLE001 - best-effort cleanup
+            logging.exception(f"delete_thread failed for {thread_id}")
+    # Fallback: best-effort manual cleanup of the in-memory storage maps.
+    for attr in ("storage", "writes", "blobs"):
+        store = getattr(agent_checkpointer, attr, None)
+        if isinstance(store, dict):
+            store.pop(thread_id, None)
+
+
+def invoke_agent(input_txt: str, role: str = "user", thread_id: str = DEFAULT_THREAD_ID):
     message =  {"messages": [{"role": role, "content": input_txt}]}
     # Reset duplicate-call tracking at the start of every user turn so that
     # legitimately repeating a tool across turns is allowed.
@@ -175,7 +221,7 @@ def invoke_agent(input_txt: str, role: str = "user"):
     try:
         agent_response = agent.invoke(
             message,
-            {"configurable": {"thread_id": "1"}, "recursion_limit": RECURSION_LIMIT},
+            {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT},
         )
     except GraphRecursionError:
         logging.warning("Supervisor hit recursion limit; returning fallback message.")
@@ -184,4 +230,106 @@ def invoke_agent(input_txt: str, role: str = "user"):
             "more details so I can try again?"
         )
     return agent_response["messages"][-1].content
+
+
+def stream_agent(input_txt: str, role: str = "user", thread_id: str = DEFAULT_THREAD_ID):
+    """Stream agent execution.
+
+    Yields tuples of ``(event_type, payload)`` where ``event_type`` is one of:
+
+    - ``"reasoning"``: payload is a string chunk of model thinking/reasoning
+      content (e.g. from a model with a thinking mode like qwen3).
+    - ``"content"``: payload is a string chunk of normal model output.
+    - ``"tool_start"``: payload is the tool name being invoked.
+    - ``"tool_end"``: payload is the tool name that just finished.
+    - ``"final"``: payload is the final assistant response string.
+    - ``"error"``: payload is an error message string.
+    """
+    from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
+
+    message = {"messages": [{"role": role, "content": input_txt}]}
+    _tool_call_history.clear()
+
+    # Track AI message chunks per message id so we can reconstruct the final
+    # supervisor response after streaming completes.
+    ai_buffers: dict[str, str] = {}
+    last_ai_id: str | None = None
+
+    def _extract_reasoning(chunk_obj: Any) -> str:
+        kwargs = getattr(chunk_obj, "additional_kwargs", None) or {}
+        for key in ("reasoning_content", "reasoning", "thinking"):
+            value = kwargs.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return ""
+
+    def _extract_text(chunk_obj: Any) -> str:
+        content = getattr(chunk_obj, "content", "")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: list[str] = []
+            for part in content:
+                if isinstance(part, str):
+                    parts.append(part)
+                elif isinstance(part, dict):
+                    text_val = part.get("text")
+                    if isinstance(text_val, str):
+                        parts.append(text_val)
+            return "".join(parts)
+        return ""
+
+    try:
+        for chunk, _metadata in agent.stream(
+            message,
+            {"configurable": {"thread_id": thread_id}, "recursion_limit": RECURSION_LIMIT},
+            stream_mode="messages",
+        ):
+            if isinstance(chunk, (AIMessageChunk, AIMessage)):
+                msg_id = getattr(chunk, "id", None) or "unknown"
+
+                reasoning = _extract_reasoning(chunk)
+                if reasoning:
+                    yield "reasoning", reasoning
+
+                text = _extract_text(chunk)
+                if text:
+                    ai_buffers[msg_id] = ai_buffers.get(msg_id, "") + text
+                    last_ai_id = msg_id
+                    yield "content", text
+
+                tool_call_chunks = getattr(chunk, "tool_call_chunks", None) or []
+                for tc in tool_call_chunks:
+                    name = tc.get("name") if isinstance(tc, dict) else None
+                    if name:
+                        yield "tool_start", name
+                if not tool_call_chunks:
+                    for tc in getattr(chunk, "tool_calls", None) or []:
+                        name = tc.get("name") if isinstance(tc, dict) else None
+                        if name:
+                            yield "tool_start", name
+            elif isinstance(chunk, ToolMessage):
+                yield "tool_end", getattr(chunk, "name", "") or ""
+    except GraphRecursionError:
+        logging.warning("Supervisor hit recursion limit; returning fallback message.")
+        yield "error", (
+            "I got stuck trying to answer that. Could you rephrase or provide "
+            "more details so I can try again?"
+        )
+        return
+
+    final_text = ai_buffers.get(last_ai_id, "") if last_ai_id else ""
+    if not final_text:
+        # Fallback: pull final assistant message from the checkpointed state.
+        try:
+            state = agent.get_state({"configurable": {"thread_id": thread_id}})
+            messages = state.values.get("messages", []) if state else []
+            for msg in reversed(messages):
+                if isinstance(msg, AIMessage) and msg.content:
+                    final_text = msg.content if isinstance(msg.content, str) else _extract_text(msg)
+                    if final_text:
+                        break
+        except Exception:  # noqa: BLE001 - best-effort fallback
+            logging.exception("Failed to retrieve final state after streaming")
+    yield "final", final_text
 

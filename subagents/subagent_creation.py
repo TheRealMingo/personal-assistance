@@ -48,11 +48,20 @@ fully in one message.
 
 # All system prompts are recommended by Copilot - Claude Ops 4.6,
 
+# Resolve the keep_alive value applied to every sub-agent LLM. When the
+# SUB_AGENTS_HAS_KEEP_ALIVE flag is true we honor SUB_AGENTS_KEEP_ALIVE so the
+# Ollama daemon keeps the model warm between invocations. Otherwise we use
+# "0m" so the model is unloaded immediately after each call (saves RAM at the
+# cost of a cold start on the next invocation).
+SUB_AGENT_KEEP_ALIVE = (
+    config["sub_agents_keep_alive"] if config["sub_agents_has_keep_alive"] else "0m"
+)
+
 llm = ChatOllama( 
     model=config["sub_agent_basic_model"],
     validate_model_on_init=True,
     temperature=0,
-    keep_alive="0m",
+    keep_alive=SUB_AGENT_KEEP_ALIVE,
     reasoning=False # TODO: Make configurable
 )
 
@@ -60,15 +69,15 @@ smart_llm = ChatOllama(
     model=config["sub_agent_smart_model"], 
     validate_model_on_init=True,
     temperature=0,
-    keep_alive="0m",
-    reasoning=False # TODO: Make configurable
+    keep_alive=SUB_AGENT_KEEP_ALIVE,
+    reasoning=True # TODO: Make configurable
 )
 
 small_llm = ChatOllama(
     model=config["sub_agent_small_model"], 
     validate_model_on_init=True,
     temperature=0,
-    keep_alive="0m",
+    keep_alive=SUB_AGENT_KEEP_ALIVE,
     reasoning=False # TODO: Make configurable
 )
 
@@ -76,8 +85,8 @@ tech_llm = ChatOllama(
     model=config["sub_agent_tech_model"],
     validate_model_on_init=True,
     temperature=0,
-    keep_alive="0m",
-    reasoning=False # TODO: Make configurable
+    keep_alive=SUB_AGENT_KEEP_ALIVE,
+    reasoning=True # TODO: Make configurable
 )
 
 
@@ -87,12 +96,12 @@ weather_agent = create_agent(
             get_current_weather_tool,
             get_weather_forecast_tool
         ],
-        system_prompt="""
+        system_prompt=f"""
         You are an American meteorologist that only uses imperial units (Fahrenheit, mph, inches).
         You are an American meteorologist that only uses imperial units and have a very deep understanding of weather. 
         You help the user get the most accurate weather information possible. You have many tools are your disposal to help you get the weather:
-            - get_current_weather_tool(city): gets the current weather for a city. If a city isn't provide the default is Chicago
-            - get_weather_forecast_tool(city, days): get the weather forecast for a city for up to 10 days. If the user ask for more than 10 days, you give them the weather for up to ten and explain you can't go pass that. 
+            - get_current_weather_tool(city): gets the current weather for a city. If a city isn't provided the default is {config["default_weather_location"]}.
+            - get_weather_forecast_tool(city, days): get the weather forecast for a city for up to 10 days. If the user ask for more than 10 days, you give them the weather for up to ten and explain you can't go pass that. If a city isn't provided the default is {config["default_weather_location"]}.
         When reporting the weather you are very verbose and you include as much information as possible.  
         If the user asks for a forecast you give them the forecast for each day.
         """ + NO_FOLLOWUP_RULE)

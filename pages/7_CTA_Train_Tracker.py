@@ -169,6 +169,45 @@ def _save_favorite_callback(
     st.session_state[f"{slot}_saved_msg"] = f"Saved “{label}” to favorites."
 
 
+def _render_favorite_picker_for_nearby(
+    result: Any,
+    *,
+    slot: str,
+    route: str | None = None,
+) -> None:
+    """Show a picker + save button for stations returned by a nearby search."""
+    if not isinstance(result, dict) or result.get("error"):
+        return
+    seen: dict[str, str] = {}
+    for p in result.get("predictions", []) or []:
+        sid = str(p.get("station_id") or "").strip()
+        if sid and sid not in seen:
+            seen[sid] = p.get("station_name") or sid
+    for s in result.get("stations", []) or []:
+        sid = str(s.get("station_id") or "").strip()
+        if sid and sid not in seen:
+            seen[sid] = s.get("station_name") or sid
+    if not seen:
+        return
+    st.markdown("**Save a station from these results as favorite**")
+    options = list(seen.keys())
+    pick = st.selectbox(
+        "Station",
+        options=options,
+        format_func=lambda sid: f"{seen[sid]} ({sid})",
+        key=f"{slot}_fav_pick",
+    )
+    st.button(
+        "⭐ Save selected station",
+        key=f"{slot}_fav_save",
+        on_click=_save_favorite_callback,
+        args=(slot, f"{seen[pick]} ({pick})", str(pick), route),
+    )
+    saved_msg = st.session_state.get(f"{slot}_saved_msg")
+    if saved_msg:
+        st.success(saved_msg)
+
+
 # ---------------------------------------------------------------------------
 # Rendering helpers
 # ---------------------------------------------------------------------------
@@ -493,12 +532,18 @@ with tab_nearby:
                 payload["lat"] = float(lat)  # type: ignore[arg-type]
                 payload["lng"] = float(lng)  # type: ignore[arg-type]
             st.session_state["train_nearby_query"] = payload
+            st.session_state.pop("train_nearby_saved_msg", None)
 
     train_nearby_query = st.session_state.get("train_nearby_query")
     if train_nearby_query is not None:
         with st.spinner("Calling CTA Train Tracker for each nearby station…"):
             result = get_all_nearby_train_arrivals_tool.invoke(train_nearby_query)
         _render_result(result)
+        _render_favorite_picker_for_nearby(
+            result,
+            slot="train_nearby",
+            route=None,
+        )
 
 
 # --- Tab 3: Browse a line --------------------------------------------------

@@ -104,6 +104,45 @@ def _save_favorite_callback(slot: str, label: str, stop_id: str, route: str | No
     st.session_state[f"{slot}_saved_msg"] = f"Saved “{label}” to favorites."
 
 
+def _render_favorite_picker_for_nearby(
+    result: Any,
+    *,
+    slot: str,
+    route: str | None,
+) -> None:
+    """Show a picker + save button for stops returned by a nearby search."""
+    if not isinstance(result, dict) or result.get("error"):
+        return
+    seen: dict[str, str] = {}
+    for p in result.get("predictions", []) or []:
+        sid = str(p.get("stop_id") or "").strip()
+        if sid and sid not in seen:
+            seen[sid] = p.get("stop_name") or sid
+    for s in result.get("stops", []) or []:
+        sid = str(s.get("stop_id") or s.get("stpid") or "").strip()
+        if sid and sid not in seen:
+            seen[sid] = s.get("stop_name") or s.get("stpnm") or sid
+    if not seen:
+        return
+    st.markdown("**Save a stop from these results as favorite**")
+    options = list(seen.keys())
+    pick = st.selectbox(
+        "Stop",
+        options=options,
+        format_func=lambda sid: f"{seen[sid]} ({sid})",
+        key=f"{slot}_fav_pick",
+    )
+    st.button(
+        "⭐ Save selected stop",
+        key=f"{slot}_fav_save",
+        on_click=_save_favorite_callback,
+        args=(slot, f"{seen[pick]} ({pick})", str(pick), route),
+    )
+    saved_msg = st.session_state.get(f"{slot}_saved_msg")
+    if saved_msg:
+        st.success(saved_msg)
+
+
 # ---------------------------------------------------------------------------
 # Rendering helpers
 # ---------------------------------------------------------------------------
@@ -301,16 +340,44 @@ with tab_stop:
                 st.error("Route, direction, and stop name are all required.")
             else:
                 st.session_state["byrdn_query"] = {
+                    "payload": {
+                        "route": route,
+                        "direction": direction,
+                        "stop_name": stop_name,
+                    },
                     "route": route,
-                    "direction": direction,
-                    "stop_name": stop_name,
                 }
+                st.session_state.pop("byrdn_saved_msg", None)
 
         byrdn_query = st.session_state.get("byrdn_query")
         if byrdn_query is not None:
             with st.spinner("Calling CTA Bus Tracker…"):
-                result = get_bus_predictions_for_stop_tool.invoke(byrdn_query)
+                result = get_bus_predictions_for_stop_tool.invoke(
+                    byrdn_query["payload"]
+                )
             _render_result(result)
+            if (
+                isinstance(result, dict)
+                and result.get("stop_id")
+                and not result.get("error")
+                and not result.get("ambiguous")
+            ):
+                rid = str(result["stop_id"])
+                rname = result.get("stop_name") or rid
+                st.button(
+                    "⭐ Save as favorite",
+                    key="fav_save_byrdn",
+                    on_click=_save_favorite_callback,
+                    args=(
+                        "byrdn",
+                        f"{rname} ({rid})",
+                        rid,
+                        byrdn_query.get("route"),
+                    ),
+                )
+            saved_msg = st.session_state.get("byrdn_saved_msg")
+            if saved_msg:
+                st.success(saved_msg)
 
 # --- Tab 2: Near location --------------------------------------------------
 with tab_nearby:
@@ -419,6 +486,7 @@ with tab_nearby:
                     "tool": "all",
                     "payload": payload,
                 }
+        st.session_state.pop("nearby_saved_msg", None)
 
     nearby_query = st.session_state.get("nearby_query")
     if nearby_query is not None:
@@ -436,6 +504,11 @@ with tab_nearby:
                     nearby_query["payload"]
                 )
         _render_result(result)
+        _render_favorite_picker_for_nearby(
+            result,
+            slot="nearby",
+            route=nearby_query["payload"].get("route"),
+        )
 
 # --- Tab 3: Browse route to discover stops --------------------------------
 with tab_browse:
