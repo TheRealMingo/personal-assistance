@@ -1,6 +1,9 @@
 """Streamlit page: Daily Routine Tracker."""
 from __future__ import annotations
+from utils.mobile_css import inject_mobile_css
+from utils.global_search_sidebar import render_global_search
 
+import logging
 import re
 from datetime import date, timedelta
 from pathlib import Path
@@ -20,7 +23,16 @@ from tools.daily_routine_tool import (
     get_todays_routine_status_tool,
 )
 
+logging.basicConfig(
+    filename="app.log",
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
 st.set_page_config(page_title="Daily Routine", page_icon="🗓️", layout="wide")
+inject_mobile_css()
+render_global_search()
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*", re.DOTALL)
 VAULT = Path(config["obsidian_vault_daily_routine_path"])
@@ -74,8 +86,10 @@ def list_available_dates() -> list[date]:
 
 def _on_checkbox_change(item: str, key: str) -> None:
     if st.session_state[key]:
+        logger.info(f"Completing routine item: {item}")
         complete_routine_item_tool.invoke({"item_name": item})
     else:
+        logger.info(f"Uncompleting routine item: {item}")
         uncomplete_routine_item_tool.invoke({"item_name": item})
     load_history.clear()
 
@@ -111,8 +125,10 @@ def _render_period(period_name: str, items: list[str], today_row: pd.Series) -> 
     bulk_label = f"✅ Complete entire {period_name.lower()} routine"
     if st.button(bulk_label, key=f"bulk-{period_name}"):
         if period_name == "Morning":
+            logger.info("Bulk-completing morning routine.")
             complete_morning_routine_tool.invoke({})
         else:
+            logger.info("Bulk-completing night routine.")
             complete_night_routine_tool.invoke({})
         load_history.clear()
         # Clear stored widget state so the next render reflects disk truth.
@@ -203,4 +219,4 @@ else:
         )
         .properties(height=300)
     )
-    st.altair_chart(line, use_container_width=True)
+    st.altair_chart(line, width='stretch')  # altair uses width='stretch'

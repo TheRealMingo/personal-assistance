@@ -10,12 +10,16 @@ Behavior:
 """
 
 from __future__ import annotations
+from utils.mobile_css import inject_mobile_css
+from utils.global_search_sidebar import render_global_search
 
 from datetime import datetime
 import logging
 from typing import Any
 
+import altair as alt
 import googlemaps
+import pandas as pd
 import streamlit as st
 
 from config.config import config
@@ -23,6 +27,8 @@ from tools.weather_tool import (
     DEFAULT_WEATHER_LOCATION,
     get_current_weather_tool,
     get_weather_forecast_tool,
+    get_hourly_weather_tool,
+    get_weather_alerts_tool,
 )
 from utils.browser_geolocation import render_browser_location_widget
 
@@ -33,7 +39,12 @@ logging.basicConfig(
 )
 
 st.set_page_config(page_title="Weather", page_icon="⛅")
+inject_mobile_css()
+render_global_search()
 st.title("⛅ Weather")
+
+if st.button("Back to Assistant"):
+    st.switch_page("0_Personal_Assistant.py")
 
 st.markdown(
         """
@@ -190,6 +201,7 @@ def _render_current(weather: dict, city: str) -> None:
     metric_cols[2].metric("UV index", uv)
     metric_cols[3].metric("Precip.", f"{precip_pct}%" if precip_pct != "—" else "—")
 
+
 def _render_forecast(forecast: Any, city: str) -> None:
     st.subheader(f"7-day forecast — {city}")
     if not isinstance(forecast, dict) or not forecast:
@@ -232,7 +244,128 @@ def _render_forecast(forecast: Any, city: str) -> None:
             st.caption(f"💧 {row['Day Precip %']}%")
 
     with st.expander("Detailed table", expanded=False):
-        st.dataframe(rows, use_container_width=True, hide_index=True)
+        st.dataframe(rows, width='stretch', hide_index=True)
+
+
+# --- Hourly forecast rendering ---
+def _render_hourly(hourly: Any, city: str, hours: int, view_mode: str) -> None:
+    st.subheader(f"Hourly forecast — {city}")
+    if isinstance(hourly, dict) and "error" in hourly:
+        st.error("Could not load hourly forecast.")
+        st.code(str(hourly["error"]))
+        return
+    if not isinstance(hourly, list) or not hourly:
+        st.info("No hourly forecast data returned.")
+        return
+
+    sliced = hourly[:hours]
+    if not sliced:
+        st.info("No hourly data returned.")
+        return
+
+    if view_mode == "Chart":
+        chart_df = pd.DataFrame(
+            [
+                {
+                    "Time": pd.to_datetime(hour.get("datetime"), errors="coerce"),
+                    "Temperature": hour.get("temperature"),
+                    "Feels Like": hour.get("feelsLike"),
+                    "Precip %": hour.get("precipitationPercent") or 0,
+                    "Condition": hour.get("weatherCondition") or "—",
+                }
+                for hour in sliced
+            ]
+        ).dropna(subset=["Time"])
+
+        if chart_df.empty:
+            st.info("No chartable hourly data.")
+            return
+
+        temp_long = chart_df.melt(
+            id_vars=["Time", "Condition"],
+            value_vars=["Temperature", "Feels Like"],
+            var_name="Series",
+            value_name="°F",
+        ).dropna(subset=["°F"])
+
+        base = alt.Chart(chart_df).encode(
+            x=alt.X("Time:T", title="Time", axis=alt.Axis(format="%a %-I %p")),
+        )
+        precip_bars = base.mark_bar(opacity=0.25, color="#3b82f6").encode(
+            y=alt.Y(
+                "Precip %:Q",
+                title="Precipitation %",
+                scale=alt.Scale(domain=[0, 100]),
+                axis=alt.Axis(orient="right"),
+            ),
+            tooltip=[
+                alt.Tooltip("Time:T", format="%a %-I %p"),
+                alt.Tooltip("Precip %:Q", title="Precip %"),
+                alt.Tooltip("Condition:N"),
+            ],
+        )
+        temp_lines = (
+            alt.Chart(temp_long)
+            .mark_line(point=True, interpolate="monotone")
+            .encode(
+                x=alt.X("Time:T", title="Time", axis=alt.Axis(format="%a %-I %p")),
+                y=alt.Y("°F:Q", title="Temperature (°F)"),
+                color=alt.Color(
+                    "Series:N",
+                    legend=None,
+                    scale=alt.Scale(
+                        domain=["Temperature", "Feels Like"],
+                        range=["#ef4444", "#f59e0b"],
+                    ),
+                ),
+                tooltip=[
+                    alt.Tooltip("Time:T", format="%a %-I %p"),
+                    alt.Tooltip("Series:N"),
+                    alt.Tooltip("°F:Q", format=".1f"),
+                    alt.Tooltip("Condition:N"),
+                ],
+            )
+        )
+        layered = (
+            alt.layer(precip_bars, temp_lines)
+            .resolve_scale(y="independent")
+            .properties(height=380)
+        )
+        st.altair_chart(layered, width='stretch')
+        st.caption(
+            "🔴 Temperature &nbsp;&nbsp; 🟡 Feels Like &nbsp;&nbsp;"
+            " 🔵 Precipitation % (right axis, bars)"
+        )
+
+        # Compact summary stats below the chart
+        temps = [h.get("temperature") for h in sliced if h.get("temperature") is not None]
+        precip = [h.get("precipitationPercent") for h in sliced if h.get("precipitationPercent") is not None]
+        if temps:
+            stat_cols = st.columns(4)
+            stat_cols[0].metric("High", f"{max(temps):.0f}°F")
+            stat_cols[1].metric("Low", f"{min(temps):.0f}°F")
+            stat_cols[2].metric("Avg", f"{sum(temps)/len(temps):.0f}°F")
+            stat_cols[3].metric(
+                "Max precip %",
+                f"{max(precip):.0f}%" if precip else "—",
+            )
+        return
+
+    # Table view
+    rows = [
+        {
+            "Time": hour.get("datetime", "—"),
+            "Temp": _format_temp(hour.get("temperature")),
+            "Feels": _format_temp(hour.get("feelsLike")),
+            "Condition": hour.get("weatherCondition", "—"),
+            "Precip %": hour.get("precipitationPercent", "—"),
+            "Precip Type": hour.get("precipitationType", "—"),
+            "UV": hour.get("uvIndex", "—"),
+            "Thunderstorm %": hour.get("thunderstormProbability", "—"),
+        }
+        for hour in sliced
+    ]
+    st.dataframe(rows, width='stretch', hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -246,11 +379,13 @@ with st.sidebar:
     st.subheader("Location")
     st.caption(f"Default location: **{DEFAULT_WEATHER_LOCATION}**")
     geo = render_browser_location_widget(key_prefix="weather_geo")
-    if geo and st.button("Use my browser location", use_container_width=True):
+    # Auto-update city whenever new coordinates arrive (no extra button needed)
+    if geo and geo != st.session_state.get("weather_geo_used"):
         resolved = _city_from_coords(geo["lat"], geo["lng"])
+        st.session_state.weather_geo_used = geo
         if resolved:
             st.session_state.weather_city = resolved
-            st.success(f"Using browser location: {resolved}")
+            st.rerun()
         else:
             st.warning(
                 "Couldn't reverse-geocode your coordinates. "
@@ -270,9 +405,9 @@ city_input = st.text_input(
 
 refresh_cols = st.columns([1, 1, 6])
 with refresh_cols[0]:
-    refresh = st.button("🔄 Refresh", use_container_width=True)
+    refresh = st.button("🔄 Refresh", width='stretch')
 with refresh_cols[1]:
-    use_default = st.button("🏠 Default", use_container_width=True)
+    use_default = st.button("🏠 Default", width='stretch')
 
 if use_default:
     st.session_state.weather_city = DEFAULT_WEATHER_LOCATION
@@ -291,20 +426,88 @@ city = (st.session_state.weather_city or DEFAULT_WEATHER_LOCATION).strip()
 def _fetch_current(city_name: str) -> Any:
     return get_current_weather_tool.invoke({"city": city_name})
 
-
 @st.cache_data(ttl=900, show_spinner=False)
 def _fetch_forecast(city_name: str, days: int) -> Any:
     return get_weather_forecast_tool.invoke({"city": city_name, "days": days})
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _fetch_hourly(city_name: str, hours: int) -> Any:
+    return get_hourly_weather_tool.invoke({"city": city_name, "hours": hours})
+
+@st.cache_data(ttl=300, show_spinner=False)
+def _fetch_alerts(city_name: str) -> Any:
+    return get_weather_alerts_tool.invoke({"city": city_name})
 
 if refresh:
     _fetch_current.clear()
     _fetch_forecast.clear()
+    _fetch_hourly.clear()
+    _fetch_alerts.clear()
 
+# --- Weather Alerts Display (uses the resolved city) ---
+alerts = _fetch_alerts(city)
+if isinstance(alerts, dict):
+    if "error" in alerts:
+        st.warning(f"Weather alert fetch error: {alerts['error']}")
+    elif alerts.get("alerts"):
+        for alert in alerts["alerts"]:
+            title_obj = alert.get("alertTitle") or {}
+            title = title_obj.get("text") if isinstance(title_obj, dict) else str(title_obj)
+            title = title or alert.get("eventType", "Weather Alert")
+            severity = alert.get("severity", "")
+            area = alert.get("areaName", "")
+            desc = alert.get("description", "")
+            source = alert.get("dataSource") or {}
+            source_name = source.get("name", "")
+            source_uri = source.get("authorityUri", "")
+            header = f"🚨 {title}"
+            if severity:
+                header += f" — {severity.capitalize()}"
+            if area:
+                header += f" ({area})"
+            st.error(header)
+            if desc:
+                st.markdown(f"> {desc}")
+            if source_name:
+                attribution = f"Source: [{source_name}]({source_uri})" if source_uri else f"Source: {source_name}"
+                st.caption(attribution)
+    elif alerts.get("message"):
+        st.info(alerts["message"])
+
+# --- Current weather (above forecast tabs) ---
 with st.spinner(f"Fetching weather for {city}…"):
     current = _fetch_current(city)
-    forecast = _fetch_forecast(city, 7)
 
 _render_current(current if isinstance(current, dict) else {}, city)
 st.divider()
-_render_forecast(forecast, city)
+
+# --- Forecast tabs ---
+
+tab1, tab2 = st.tabs(["7-day forecast", "Hourly forecast"])
+
+with tab1:
+    with st.spinner("Loading 7-day forecast..."):
+        forecast = _fetch_forecast(city, 7)
+        _render_forecast(forecast, city)
+
+with tab2:
+    hourly_controls = st.columns([2, 2, 6])
+    with hourly_controls[0]:
+        hourly_view = st.radio(
+            "View",
+            options=["Chart", "Table"],
+            index=0,
+            horizontal=True,
+            key="hourly_view_mode",
+        )
+    with hourly_controls[1]:
+        hourly_hours = st.selectbox(
+            "Hours",
+            options=[12, 24, 48, 72, 120, 240],
+            index=1,
+            key="hourly_hours_choice",
+            help="How many hours of forecast to show (Google Weather API max 240).",
+        )
+    with st.spinner("Loading hourly forecast..."):
+        hourly = _fetch_hourly(city, int(hourly_hours))
+        _render_hourly(hourly, city, int(hourly_hours), hourly_view)

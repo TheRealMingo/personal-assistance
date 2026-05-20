@@ -9,6 +9,7 @@ from urllib.parse import quote_plus
 
 import logging
 logging.basicConfig(filename='personal_assistant_tool.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+from tools.api_call_tracker import record_api_call
 
 
 @tool(return_direct=True)
@@ -22,11 +23,16 @@ def wolfram_tool(query: str) -> str:
     """
     logging.info(f"Query to Wolfram Alpha: {query}")
     tuu.tool_usage_counter["wolfram_tool"] = tuu.tool_usage_counter["wolfram_tool"] + 1
+    record_api_call("wolfram_alpha")
     query = quote_plus(query)
     # Documentation of the LLM API: https://products.wolframalpha.com/llm-api/documentation
-    api_call = f"http://api.wolframalpha.com/v1/llm-api?input={query}&appid={config["wolfram_alpha_llm_api_key"]}"
+    api_call = f"http://api.wolframalpha.com/v1/llm-api?input={query}&appid={config['wolfram_alpha_llm_api_key']}"
+    logged_url = f"http://api.wolframalpha.com/v1/llm-api?input={query}&appid=REDACTED"
+    logging.info(f"Making API call to Wolfram Alpha: {logged_url}")
     response = requests.get(api_call)
+    logging.info(f"Wolfram Alpha API status: {response.status_code}")
     if response.status_code == 200:
+        logging.info(f"Wolfram Alpha response: {response.text}")
         return response.text
     else:
         logging.error(f"Error calling Wolfram Alpha API: {response.status_code} - {response.text}")

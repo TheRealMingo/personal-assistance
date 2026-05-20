@@ -20,12 +20,17 @@ from typing import Any
 
 from langchain_ollama import ChatOllama
 from config.config import config
+from config.runtime_settings import load_settings
 from tools.email_tool import send_email_tool
 from tools.obsidian_tool import list_incomplete_tasks_tool
 from tools.weather_tool import get_current_weather_tool
 from tools.time_tool import get_current_datetime_tool
 from tools.cta_bus_tool import DATA_DIR as BUS_DATA_DIR, get_bus_predictions_for_stop_tool
 from tools.cta_train_tool import DATA_DIR as TRAIN_DATA_DIR, get_train_arrivals_for_station_tool
+from tools.daily_routine_tool import (
+    get_todays_routine_status_tool,
+    list_incomplete_routine_items_tool,
+)
 
 logging.basicConfig(
     filename="cron_agent.log",
@@ -165,48 +170,143 @@ def build_favorite_trains_summary() -> str:
     return summary
 
 
+def build_routine_reminder(period: str) -> str:
+    """Build an HTML reminder for the morning or night routine."""
+    period = period.lower()
+    if period not in ("morning", "night"):
+        raise ValueError("period must be 'morning' or 'night'")
+    pending = list_incomplete_routine_items_tool.invoke({"period": period})
+    label = "Morning" if period == "morning" else "Evening"
+    return (
+        f"<p>This is your {label.lower()} routine reminder.</p>"
+        f"<pre style=\"font-family: -apple-system, system-ui, sans-serif;\">{pending}</pre>"
+    )
+
+
+def build_due_tasks_reminder(lead_minutes: int) -> str:
+    """Build an HTML reminder for tasks due within ``lead_minutes`` (or overdue)."""
+    from datetime import datetime, timedelta
+
+    tasks = list_incomplete_tasks_tool.invoke({})
+    if isinstance(tasks, str):
+        return f"<p>{tasks}</p>"
+
+    now = datetime.now()
+    cutoff = now + timedelta(minutes=int(lead_minutes))
+    upcoming: list[dict[str, Any]] = []
+    for task in tasks:
+        due = task.get("Due Date")
+        if not due:
+            continue
+        try:
+            due_dt = datetime.strptime(str(due), "%Y-%m-%dT%H:%M:%S")
+        except ValueError:
+            continue
+        if due_dt <= cutoff:
+            upcoming.append(
+                {
+                    "Task": task.get("Task"),
+                    "Due Date": due,
+                    "Priority": task.get("Priority"),
+                    "Status": "Overdue" if due_dt < now else "Due soon",
+                }
+            )
+
+    if not upcoming:
+        return "<p>No tasks due in the configured window. 🎉</p>"
+
+    rows = "".join(
+        f"<tr><td>{t['Task']}</td><td>{t['Due Date']}</td>"
+        f"<td>{t.get('Priority','')}</td><td>{t['Status']}</td></tr>"
+        for t in upcoming
+    )
+    return (
+        "<table border='1' cellpadding='6' cellspacing='0'>"
+        "<thead><tr><th>Task</th><th>Due</th><th>Priority</th><th>Status</th></tr></thead>"
+        f"<tbody>{rows}</tbody></table>"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Email weather, task, and CTA favorite reports."
     )
-    parser.add_argument("--recipient", required=True, help="Email address to send to")
+    parser.add_argument(
+        "--recipient",
+        required=False,
+        default=None,
+        help=(
+            "Email address to send to. If omitted, uses 'notification_email' "
+            "from data/settings.json."
+        ),
+    )
     parser.add_argument(
         "--report",
-        choices=["weather", "tasks", "buses", "trains", "both", "all"],
+        choices=[
+            "weather", "tasks", "buses", "trains", "both", "all",
+            "morning_reminder", "evening_reminder", "due_tasks",
+        ],
         default="all",
         help=(
             "Which report(s) to send. 'both' = weather + tasks (legacy). "
-            "'all' = weather + tasks + favorite buses + favorite trains."
+            "'all' = weather + tasks + favorite buses + favorite trains. "
+            "'morning_reminder' / 'evening_reminder' / 'due_tasks' send "
+            "reminder emails (recipient defaults to settings notification_email)."
         ),
     )
     parser.add_argument("--city", default="Chicago", help="City for weather report (default: Chicago)")
     args = parser.parse_args()
 
+    settings = load_settings()
+    recipient = args.recipient or settings.get("notification_email", "")
+    if not recipient:
+        raise SystemExit(
+            "No recipient provided and no notification_email saved in settings."
+        )
+
     sections = []
     subject_parts = []
 
-    if args.report in ("weather", "both", "all"):
-        sections.append("<h1>Weather Report</h1><br>" + build_weather_summary(args.city))
-        subject_parts.append(f"Weather - {args.city}")
+    if args.report == "morning_reminder":
+        sections.append(
+            "<h1>Morning Routine Reminder</h1><br>" + build_routine_reminder("morning")
+        )
+        subject_parts.append("Morning Routine Reminder")
+    elif args.report == "evening_reminder":
+        sections.append(
+            "<h1>Evening Routine Reminder</h1><br>" + build_routine_reminder("night")
+        )
+        subject_parts.append("Evening Routine Reminder")
+    elif args.report == "due_tasks":
+        lead = int(settings.get("task_reminder_lead_minutes", 60))
+        sections.append(
+            f"<h1>Tasks Due Soon (next {lead} min)</h1><br>"
+            + build_due_tasks_reminder(lead)
+        )
+        subject_parts.append("Task Reminder")
+    else:
+        if args.report in ("weather", "both", "all"):
+            sections.append("<h1>Weather Report</h1><br>" + build_weather_summary(args.city))
+            subject_parts.append(f"Weather - {args.city}")
 
-    if args.report in ("tasks", "both", "all"):
-        sections.append("<h1>Incomplete Tasks</h1><br>" + build_task_summary())
-        subject_parts.append("Incomplete Tasks")
+        if args.report in ("tasks", "both", "all"):
+            sections.append("<h1>Incomplete Tasks</h1><br>" + build_task_summary())
+            subject_parts.append("Incomplete Tasks")
 
-    if args.report in ("buses", "all"):
-        sections.append("<h1>Favorite Bus Stops</h1><br>" + build_favorite_buses_summary())
-        subject_parts.append("Favorite Buses")
+        if args.report in ("buses", "all"):
+            sections.append("<h1>Favorite Bus Stops</h1><br>" + build_favorite_buses_summary())
+            subject_parts.append("Favorite Buses")
 
-    if args.report in ("trains", "all"):
-        sections.append("<h1>Favorite Train Stations</h1><br>" + build_favorite_trains_summary())
-        subject_parts.append("Favorite Trains")
+        if args.report in ("trains", "all"):
+            sections.append("<h1>Favorite Train Stations</h1><br>" + build_favorite_trains_summary())
+            subject_parts.append("Favorite Trains")
 
     body = "<br><br><hr><br><br>".join(sections)
     subject = "Daily Report: " + " | ".join(subject_parts)
 
     email_result = send_email_tool.invoke(
         {
-            "recipient": args.recipient,
+            "recipient": recipient,
             "subject": subject,
             "body": body,
             "html": True

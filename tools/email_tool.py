@@ -4,6 +4,7 @@ from email.mime.multipart import MIMEMultipart
 from langchain.tools import tool
 import logging
 from config.config import config
+from utils.notification_log import log_notification
 
 logging.basicConfig(filename='email_tool.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -29,12 +30,14 @@ def _send_via_smtp(message: MIMEMultipart) -> None:
             "Set 'gmail_smtp_email' and 'gmail_smtp_app_password' in config/config.py."
         )
     email, password = creds
+    logging.info(f"Connecting to SMTP {SMTP_HOST}:{SMTP_PORT} as {email}")
     with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
         server.ehlo()
         server.starttls()
         server.ehlo()
         server.login(email, password)
         server.send_message(message)
+    logging.info(f"SMTP message sent successfully via {SMTP_HOST}:{SMTP_PORT}")
 
 
 @tool
@@ -78,11 +81,13 @@ def send_email_tool(
         _send_via_smtp(message)
 
         logging.info(f"Email sent successfully to {recipient}")
+        log_notification("email", subject, "sent", detail=f"To: {recipient}")
         return f"✓ Email sent successfully to {recipient}\nSubject: {subject}"
 
     except Exception as e:
         error_msg = f"❌ Failed to send email: {str(e)}"
         logging.error(error_msg)
+        log_notification("email", subject, "failed", detail=str(e))
         return error_msg
 
 
@@ -145,9 +150,11 @@ def send_email_with_attachment_tool(
         _send_via_smtp(message)
 
         logging.info(f"Email with attachment sent successfully to {recipient}")
+        log_notification("email", subject, "sent", detail=f"To: {recipient} (with attachment)")
         return f"✓ Email sent successfully to {recipient}\nSubject: {subject}"
 
     except Exception as e:
         error_msg = f"❌ Failed to send email: {str(e)}"
         logging.error(error_msg)
+        log_notification("email", subject, "failed", detail=str(e))
         return error_msg

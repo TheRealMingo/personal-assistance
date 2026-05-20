@@ -1,6 +1,8 @@
 """Streamlit page for browsing exercise history from the Obsidian vault."""
 
 from __future__ import annotations
+from utils.mobile_css import inject_mobile_css
+from utils.global_search_sidebar import render_global_search
 
 import logging
 import re
@@ -10,7 +12,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
-from yaml import safe_load
+from yaml import safe_load, dump as yaml_dump
 
 from config.config import config
 from config.exercise_mapping import MUSCLE_GROUPS, get_muscle_group, list_exercises
@@ -22,6 +24,8 @@ logging.basicConfig(
 )
 
 st.set_page_config(page_title="Exercise History", page_icon="📈", layout="wide")
+inject_mobile_css()
+render_global_search()
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*", re.DOTALL)
 WEIGHT_RE = re.compile(r"([-+]?\d*\.?\d+)")
@@ -57,6 +61,52 @@ def _parse_sets(raw: Any) -> int:
         return int(float(raw))
     except (TypeError, ValueError):
         return 0
+
+
+def _update_exercise_note(file_path, row) -> None:
+    """Update the Obsidian markdown frontmatter for an exercise with values from a row."""
+    file = Path(file_path)
+    if not file.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    text = file.read_text(encoding="utf-8")
+    match = FRONTMATTER_RE.match(text)
+    if not match:
+        raise ValueError("No YAML frontmatter found in note.")
+    data = safe_load(match.group(1)) or {}
+    if not isinstance(data, dict):
+        data = {}
+
+    # Build a case-insensitive map of original keys to preserve casing/order
+    key_map = {str(k).strip().lower(): k for k in data.keys()}
+
+    def set_field(field_name: str, value: Any) -> None:
+        target_key = key_map.get(field_name.lower(), field_name)
+        data[target_key] = value
+
+    date_val = row["Date"]
+    if pd.isna(date_val):
+        date_str = ""
+    elif hasattr(date_val, "strftime"):
+        date_str = date_val.strftime("%Y-%m-%d %H:%M")
+    else:
+        date_str = str(date_val)
+
+    set_field("Exercise", str(row["Exercise"]))
+    set_field("Date", date_str)
+    # The reps/duration field name in notes varies; try common variants.
+    reps_key = key_map.get("duration / reps") or key_map.get("reps/duration") or "Duration / Reps"
+    data[reps_key] = row["Reps/Duration"]
+    set_field("Sets", row["Sets"])
+    weight_key = key_map.get("weight") or key_map.get("weight (lbs)") or "Weight"
+    weight_val = row["Weight (lbs)"]
+    data[weight_key] = "Bodyweight" if not weight_val else f"{weight_val} lbs"
+    primary_key = key_map.get("primary muscle group") or "Primary Muscle Group"
+    if primary_key in data and row.get("Muscle Group") is not None:
+        data[primary_key] = row["Muscle Group"]
+
+    new_frontmatter = f"---\n{yaml_dump(data, sort_keys=False, allow_unicode=True)}---\n"
+    new_text = FRONTMATTER_RE.sub(new_frontmatter, text, count=1)
+    file.write_text(new_text, encoding="utf-8")
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -123,7 +173,7 @@ def load_exercises(vault_path: str) -> pd.DataFrame:
                 "Sets": _parse_sets(norm.get("sets")),
                 "Weight (lbs)": _parse_weight(norm.get("weight")),
                 "Muscle Group": muscle_group,
-                "File": file.name,
+                "File": str(file.resolve()),
             }
         )
 
@@ -167,7 +217,7 @@ def _prefill_track_exercise(row: pd.Series) -> None:
         float(row["Weight (lbs)"])
     )
 
-    st.switch_page("pages/4_Track_Exercise.py")
+    st.switch_page("pages/5_Track_Exercise.py")
 
 
 # ---------------------------------------------------------------------------
@@ -267,41 +317,166 @@ editor_key = {
     "Last week (Sun–Sat)": "hist_table_editor_last_week",
 }[view_choice]
 
+
+@st.dialog("Edit exercise")
+def _edit_exercise_dialog(row: pd.Series, file_path: str, table_key: str) -> None:
+    """Modal that lets the user edit every field of a single exercise row."""
+    from pathlib import Path as _Path
+    st.caption(f"File: `{_Path(file_path).name}`")
+
+    raw_date = row["Date"]
+    if pd.notna(raw_date) and hasattr(raw_date, "to_pydatetime"):
+        dt_val = raw_date.to_pydatetime()
+        date_default = dt_val.date()
+        time_default = dt_val.time().replace(second=0, microsecond=0)
+    else:
+        dt_now = datetime.now()
+        date_default = dt_now.date()
+        time_default = dt_now.time().replace(second=0, microsecond=0)
+
+    with st.form(f"edit_form_{table_key}"):
+        new_exercise = st.text_input("Exercise", value=str(row["Exercise"]))
+        c1, c2 = st.columns(2)
+        with c1:
+            new_date = st.date_input("Date", value=date_default)
+        with c2:
+            new_time = st.time_input("Time", value=time_default)
+        c3, c4, c5 = st.columns(3)
+        with c3:
+            new_reps = st.number_input(
+                "Reps / Duration",
+                min_value=0.0,
+                value=float(row["Reps/Duration"] or 0),
+                step=1.0,
+            )
+        with c4:
+            new_sets = st.number_input(
+                "Sets",
+                min_value=0,
+                value=int(row["Sets"] or 0),
+                step=1,
+            )
+        with c5:
+            new_weight = st.number_input(
+                "Weight (lbs)  — 0 = Bodyweight",
+                min_value=0.0,
+                value=float(row["Weight (lbs)"] or 0),
+                step=0.5,
+            )
+
+        muscle_options = MUSCLE_GROUPS if isinstance(MUSCLE_GROUPS, (list, tuple)) else list(MUSCLE_GROUPS)
+        current_muscle = str(row.get("Muscle Group", "")).strip().lower()
+        muscle_options_lc = [str(m).lower() for m in muscle_options]
+        try:
+            muscle_index = muscle_options_lc.index(current_muscle)
+        except ValueError:
+            muscle_index = 0
+        new_muscle = st.selectbox(
+            "Muscle Group",
+            options=muscle_options,
+            index=muscle_index if muscle_options else 0,
+        )
+
+        btn_cols = st.columns(3)
+        save_clicked = btn_cols[0].form_submit_button("💾 Save", type="primary", width='stretch')
+        repeat_clicked = btn_cols[1].form_submit_button("🔁 Repeat", width='stretch')
+        cancel_clicked = btn_cols[2].form_submit_button("Cancel", width='stretch')
+
+    if cancel_clicked:
+        st.session_state.pop(table_key, None)
+        st.session_state.pop(f"confirm_delete_{table_key}", None)
+        st.rerun()
+
+    if save_clicked or repeat_clicked:
+        try:
+            combined_dt = datetime.combine(new_date, new_time)
+        except Exception:  # noqa: BLE001
+            combined_dt = datetime.now()
+        new_row = pd.Series(
+            {
+                "Exercise": new_exercise,
+                "Date": pd.Timestamp(combined_dt),
+                "Reps/Duration": new_reps,
+                "Sets": new_sets,
+                "Weight (lbs)": new_weight,
+                "Muscle Group": new_muscle,
+            }
+        )
+        try:
+            _update_exercise_note(file_path, new_row)
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"Failed to update {file_path}: {exc}")
+            return
+        load_exercises.clear()
+        st.session_state.pop(table_key, None)
+        st.session_state.pop(f"confirm_delete_{table_key}", None)
+        if repeat_clicked:
+            _prefill_track_exercise(new_row)
+        else:
+            st.toast(f"Updated {file_path}", icon="✅")
+            st.rerun()
+
+    # --- Delete section ---
+    st.divider()
+    if st.session_state.get(f"confirm_delete_{table_key}"):
+        st.warning(
+            "⚠️ **Permanently delete this exercise note?** This cannot be undone."
+        )
+        d_cols = st.columns(2)
+        if d_cols[0].button("Yes, delete", type="primary", key=f"confirm_yes_{table_key}", width='stretch'):
+            try:
+                Path(file_path).unlink()
+            except Exception as exc:  # noqa: BLE001
+                st.error(f"Could not delete file: {exc}")
+                return
+            load_exercises.clear()
+            st.session_state.pop(f"confirm_delete_{table_key}", None)
+            st.session_state.pop(table_key, None)
+            st.toast("Exercise deleted.", icon="🗑️")
+            st.rerun()
+        if d_cols[1].button("No, keep", key=f"confirm_no_{table_key}", width='stretch'):
+            st.session_state.pop(f"confirm_delete_{table_key}", None)
+            st.rerun()
+    else:
+        if st.button("🗑️ Delete exercise", key=f"delete_btn_{table_key}"):
+            st.session_state[f"confirm_delete_{table_key}"] = True
+            st.rerun()
+
+
 if view_df.empty:
     st.info("No exercises match the current filters.")
 else:
     st.caption(
-        "Click a column header to sort. Select a row to repeat that exercise."
+        "Click any cell in a row to open an edit modal with every field for that exercise."
     )
 
-    table_df = view_df.drop(columns=["File"]).reset_index(drop=True).copy()
-    table_df.insert(0, "Repeat", False)
+    table_df = view_df.drop(columns=["File"]).reset_index(drop=True)
 
-    edited_df = st.data_editor(
+    selection_state = st.dataframe(
         table_df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
-        num_rows="fixed",
-        disabled=[c for c in table_df.columns if c != "Repeat"],
+        on_select="rerun",
+        selection_mode="single-row",
         column_config={
-            "Repeat": st.column_config.CheckboxColumn(
-                "Repeat",
-                help="Check a row to open Track Exercise pre-filled with its details.",
-                default=False,
-            ),
             "Date": st.column_config.DatetimeColumn("Date", format="YYYY-MM-DD HH:mm"),
             "Reps/Duration": st.column_config.NumberColumn("Reps/Duration"),
             "Sets": st.column_config.NumberColumn("Sets"),
-            "Weight (lbs)": st.column_config.NumberColumn(
-                "Weight (lbs)", format="%.1f"
-            ),
+            "Weight (lbs)": st.column_config.NumberColumn("Weight (lbs)", format="%.1f"),
         },
         key=editor_key,
     )
 
-    repeat_rows = edited_df.index[edited_df["Repeat"]].tolist()
-    if repeat_rows:
-        _prefill_track_exercise(view_df.reset_index(drop=True).iloc[repeat_rows[0]])
+    selected_rows = (
+        getattr(getattr(selection_state, "selection", None), "rows", None)
+        or (selection_state.get("selection", {}).get("rows") if isinstance(selection_state, dict) else None)
+        or []
+    )
+    if selected_rows:
+        sel_idx = int(selected_rows[0])
+        sel_row = view_df.reset_index(drop=True).iloc[sel_idx]
+        _edit_exercise_dialog(sel_row, str(sel_row["File"]), editor_key)
+
 
 # --- Trend chart -----------------------------------------------------------
 st.subheader("Progress Over Time")

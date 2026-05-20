@@ -7,6 +7,7 @@ from pytz import timezone
 from uuid import uuid4
 import googlemaps
 import requests
+from tools.api_call_tracker import record_api_call
 
 gmaps = googlemaps.Client(key=config["google_maps_api_key"])
 
@@ -30,12 +31,16 @@ def get_current_weather_tool(city: str = DEFAULT_WEATHER_LOCATION) -> str:
     if not city:
         city = DEFAULT_WEATHER_LOCATION
     try:
+        record_api_call("google_maps")
         geocode_result = gmaps.geocode(city)
         location = geocode_result[0]["geometry"]["location"]
         lat = location["lat"]
         lng = location["lng"]
-        google_weather_api_call = f"https://weather.googleapis.com/v1/currentConditions:lookup?key={config["google_maps_api_key"]}&location.latitude={lat}&location.longitude={lng}&unitsSystem=IMPERIAL"
+        google_weather_api_call = f"https://weather.googleapis.com/v1/currentConditions:lookup?key={config['google_maps_api_key']}&location.latitude={lat}&location.longitude={lng}&unitsSystem=IMPERIAL"
+        logging.info(f"Making API call to Google Weather API for current conditions: {google_weather_api_call}")
+        record_api_call("google_weather")
         response = requests.get(google_weather_api_call)
+        logging.info(f"Current weather API status: {response.status_code}")
         weather = response.json()
         logging.info(f"Response from current weather api (before timeZone calculation): {weather}")
         timezone_str = weather["timeZone"]["id"] #TODO: if timeZone is not here, don't break
@@ -45,7 +50,86 @@ def get_current_weather_tool(city: str = DEFAULT_WEATHER_LOCATION) -> str:
         return weather
     except Exception as e:
         logging.error(f"Error getting weather for {city}, Error: {str(e)}")
+
         return f"Could not retrieve weather for {city}. Error: {str(e)}"
+
+
+# --- Hourly Weather Tool ---
+@tool
+def get_hourly_weather_tool(city: str = DEFAULT_WEATHER_LOCATION, hours: int = 24) -> str:
+    """
+    Get the hourly weather forecast for a city for a given number of hours (up to 240, per Google API limit).
+    Args:
+        city: The city to get the hourly weather for. If not provided, defaults to the configured DEFAULT_WEATHER_LOCATION.
+        hours: The number of hours to get the forecast for (default 24, max 240).
+    Returns:
+        A list of hourly weather data dicts, or a dict with an "error" key if failed.
+    """
+    logging.info(f"Requested hourly weather for city: {city}, hours: {hours}")
+    hours = max(1, min(int(hours), 240))
+    if not city:
+        city = DEFAULT_WEATHER_LOCATION
+    try:
+        geocode_result = gmaps.geocode(city)
+        if not geocode_result:
+            raise ValueError(f"Could not geocode city: {city}")
+        location = geocode_result[0]["geometry"]["location"]
+        lat = location["lat"]
+        lng = location["lng"]
+        google_weather_api_call = (
+            f"https://weather.googleapis.com/v1/forecast/hours:lookup?key={config['google_maps_api_key']}"
+            f"&location.latitude={lat}&location.longitude={lng}&unitsSystem=IMPERIAL&hours={hours}"
+        )
+        logging.info(f"Making API call to Google Weather API for hourly forecast: {google_weather_api_call}")
+        response = requests.get(google_weather_api_call)
+        logging.info(f"Hourly weather API status: {response.status_code}")
+        if response.status_code != 200:
+            raise ValueError(f"Weather API error: {response.status_code} {response.text}")
+        weather = response.json()
+        logging.info(f"Response from hourly weather api: {weather}")
+
+        timezone_id = weather.get("timeZone", {}).get("id", config.get("timezone", "America/Chicago"))
+        try:
+            tz = timezone(timezone_id)
+        except Exception:
+            tz = timezone("America/Chicago")
+        now = datetime.now(tz)
+
+        hourly_data = weather.get("forecastHours", [])
+        if not isinstance(hourly_data, list) or not hourly_data:
+            return {"error": f"No hourly forecast data returned for {city}."}
+
+        parsed_hours = []
+        for hour in hourly_data:
+            dt_fields = hour.get("displayDateTime", {})
+            try:
+                year = int(dt_fields["year"])
+                month = int(dt_fields["month"])
+                day = int(dt_fields["day"])
+                hour_of_day = int(dt_fields["hours"])
+                dt = datetime(year, month, day, hour_of_day, tzinfo=tz)
+            except (KeyError, ValueError, TypeError):
+                dt = now
+            if dt < now:
+                continue
+
+            payload = {
+                "datetime": dt.strftime("%Y-%m-%d %H:%M"),
+                "temperature": (hour.get("temperature") or {}).get("degrees"),
+                "feelsLike": (hour.get("feelsLikeTemperature") or {}).get("degrees"),
+                "weatherCondition": hour.get("weatherCondition", {}).get("description", {}).get("text"),
+                "precipitationPercent": hour.get("precipitation", {}).get("probability", {}).get("percent"),
+                "precipitationType": hour.get("precipitation", {}).get("probability", {}).get("type"),
+                "uvIndex": hour.get("uvIndex"),
+                "thunderstormProbability": hour.get("thunderstormProbability"),
+            }
+            parsed_hours.append(payload)
+
+        logging.info(f"Returning hourly weather: {parsed_hours}")
+        return parsed_hours
+    except Exception as e:
+        logging.error(f"Error getting hourly weather for {city}, Error: {str(e)}")
+        return {"error": f"Could not retrieve hourly weather for {city}. Error: {str(e)}"}
 
 
 @tool
@@ -76,8 +160,10 @@ def get_weather_forecast_tool(city: str = DEFAULT_WEATHER_LOCATION, days: int = 
         location = geocode_result[0]["geometry"]["location"]
         lat = location["lat"]
         lng = location["lng"]
-        google_weather_api_call = f"https://weather.googleapis.com/v1/forecast/days:lookup?key={config["google_maps_api_key"]}&location.latitude={lat}&location.longitude={lng}&unitsSystem=IMPERIAL&days={api_days}&pageSize=10"
+        google_weather_api_call = f"https://weather.googleapis.com/v1/forecast/days:lookup?key={config['google_maps_api_key']}&location.latitude={lat}&location.longitude={lng}&unitsSystem=IMPERIAL&days={api_days}&pageSize=10"
+        logging.info(f"Making API call to Google Weather API for forecast: {google_weather_api_call}")
         response = requests.get(google_weather_api_call)
+        logging.info(f"Weather forecast API status: {response.status_code}")
         weather = response.json()
         logging.info(f"Response from weather forecast api: {weather}")
 
@@ -143,3 +229,46 @@ def get_weather_forecast_tool(city: str = DEFAULT_WEATHER_LOCATION, days: int = 
     except Exception as e:
         logging.error(f"Error getting weather for {city}, Error: {str(e)}")
         return f"Could not retrieve weather for {city}. Error: {str(e)}"
+
+
+# --- Weather Alerts Tool ---
+@tool
+def get_weather_alerts_tool(city: str = DEFAULT_WEATHER_LOCATION) -> str:
+    """Get active weather alerts for a given city using the Google Weather API.
+
+    Args:
+        city: The city to get weather alerts for. Defaults to the configured DEFAULT_WEATHER_LOCATION.
+
+    Returns:
+        A dict with an "alerts" list of active weather alerts, or an "error" key on failure.
+    """
+    logging.info(f"Requested weather alerts for city: {city}")
+    if not city:
+        city = DEFAULT_WEATHER_LOCATION
+    try:
+        geocode_result = gmaps.geocode(city)
+        if not geocode_result:
+            raise ValueError(f"Could not geocode city: {city}")
+        location = geocode_result[0]["geometry"]["location"]
+        lat = location["lat"]
+        lng = location["lng"]
+        google_weather_api_call = (
+            f"https://weather.googleapis.com/v1/publicAlerts:lookup?key={config['google_maps_api_key']}"
+            f"&location.latitude={lat}&location.longitude={lng}&languageCode=en"
+        )
+        logging.info(f"Making API call to Google Weather API for alerts: {google_weather_api_call}")
+        response = requests.get(google_weather_api_call)
+        logging.info(f"Weather alerts API status: {response.status_code}")
+        if response.status_code != 200:
+            logging.warning(f"Weather Alerts API non-200: {response.status_code} {response.text}")
+            return {"alerts": [], "message": f"No active weather alerts for {city}."}
+        data = response.json()
+        logging.info(f"Response from weather alerts api: {data}")
+        # When there are no active alerts the API returns only {"regionCode": "..."} — no weatherAlerts key.
+        alert_list = data.get("weatherAlerts", [])
+        if not alert_list:
+            return {"alerts": [], "message": f"No active weather alerts for {city}."}
+        return {"alerts": alert_list}
+    except Exception as e:
+        logging.error(f"Error getting weather alerts for {city}, Error: {str(e)}")
+        return {"error": f"Could not retrieve weather alerts for {city}. Error: {str(e)}"}
