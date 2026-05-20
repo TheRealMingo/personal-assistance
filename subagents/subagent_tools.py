@@ -1,4 +1,4 @@
-from subagents.subagent_creation import weather_agent, exercise_agent, date_and_time_agent, stem_agent, coder_agent, task_manager_agent, email_agent, cta_bus_agent, cta_train_agent, daily_routine_agent
+from subagents.subagent_creation import weather_agent, exercise_agent, date_and_time_agent, stem_agent, coder_agent, task_manager_agent, email_agent, cta_bus_agent, cta_train_agent, daily_routine_agent, shopping_list_agent, web_search_agent, book_agent
 
 from langchain.tools import tool
 
@@ -32,7 +32,9 @@ def exercise_agent_tool(prompt: str) -> str:
     Returns:
         - exercise information related to the user prompt
     """
+    logging.info(f"Exercise agent called with prompt: {prompt}")
     result = exercise_agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    logging.info(f"Exercise agent returns: {result['messages'][-1].content}")
     return result["messages"][-1].content
 
 @tool
@@ -46,7 +48,9 @@ def date_and_time_agent_tool(prompt: str) -> str:
     Returns:
         - date and time information related to the user prompt
     """
+    logging.info(f"Date/Time agent called with prompt: {prompt}")
     result = date_and_time_agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    logging.info(f"Date/Time agent returns: {result['messages'][-1].content}")
     return result["messages"][-1].content
 
 @tool
@@ -59,7 +63,9 @@ def stem_agent_tool(prompt):
     Returns:
         - information related to the user prompt
     """
+    logging.info(f"STEM agent called with prompt: {prompt}")
     result = stem_agent.invoke({"messages": [{"role": "user", "content": prompt}]})
+    logging.info(f"STEM agent returns: {result['messages'][-1].content}")
     return result["messages"][-1].content
 
 @tool(return_direct=True)
@@ -75,6 +81,7 @@ def coder_agent_tool(prompt):
     logging.info(f"Coder agent called with prompt: {prompt}")
     result = coder_agent.invoke({"messages": [{"role": "user", "content": prompt},]}, 
                                 {"configurable": {"thread_id": "1"}},)
+    logging.info(f"Coder agent returns: {result['messages'][-1].content}")
     return result["messages"][-1].content
 
 
@@ -178,6 +185,78 @@ def daily_routine_agent_tool(prompt: str) -> str:
     """
     logging.info(f"Daily Routine agent called with prompt: {prompt}")
     result = daily_routine_agent.invoke(
+        {"messages": [{"role": "user", "content": prompt}]}
+    )
+    return result["messages"][-1].content
+
+
+@tool
+def shopping_list_agent_tool(prompt: str) -> str:
+    """
+    Shopping List agent manages the user's shopping list. Capabilities include:
+        - Creating a new shopping list item
+        - Deleting a shopping list item
+        - Marking a shopping list item as bought
+        - Updating fields on an existing item (description, url, price, category, bought)
+        - Viewing all shopping list items
+        - Viewing shopping list items filtered by category
+
+    Args:
+        - prompt: the exact prompt from the user
+
+    Returns:
+        - confirmation or list of shopping list items related to the user prompt
+    """
+    logging.info(f"Shopping List agent called with prompt: {prompt}")
+    result = shopping_list_agent.invoke(
+        {"messages": [{"role": "user", "content": prompt}]}
+    )
+    return result["messages"][-1].content
+
+
+@tool
+def web_search_agent_tool(prompt: str) -> str:
+    """
+    Web Search agent searches the web and extracts page content. Capabilities include:
+        - Searching the web for up-to-date information on any topic
+        - Extracting content from a specific URL
+        - Finding websites relevant to the user's query
+
+    Uses Tavily Search as the primary provider with Brave Search as fallback.
+
+    Args:
+        - prompt: the exact prompt from the user
+
+    Returns:
+        - web search results or extracted page content
+    """
+    logging.info(f"Web Search agent called with prompt: {prompt}")
+    result = web_search_agent.invoke(
+        {"messages": [{"role": "user", "content": prompt}]}
+    )
+    return result["messages"][-1].content
+
+
+@tool
+def book_agent_tool(prompt: str) -> str:
+    """
+    Book agent manages the user's reading list. Capabilities include:
+        - Adding a new book (with title, author, genre, notes, status)
+        - Updating a book's reading status
+        - Updating any field on an existing book
+        - Listing all books or filtering by status
+        - Deleting a book from the reading list
+
+    Valid statuses: "To Be Read", "Currently Reading", "Read", "Did not finish".
+
+    Args:
+        - prompt: the exact prompt from the user
+
+    Returns:
+        - confirmation or list of books related to the user prompt
+    """
+    logging.info(f"Book agent called with prompt: {prompt}")
+    result = book_agent.invoke(
         {"messages": [{"role": "user", "content": prompt}]}
     )
     return result["messages"][-1].content

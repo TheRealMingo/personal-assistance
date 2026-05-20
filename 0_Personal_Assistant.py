@@ -3,12 +3,37 @@ import streamlit as st
 import logging
 import time
 import uuid
+from pathlib import Path
 from config.config import config
 from supervisor_agent import agent, invoke_agent, stream_agent, reset_thread
+from utils.browser_notifications import render_notification_bridge
+from utils.mobile_css import inject_mobile_css
+from utils.global_search_sidebar import render_global_search
 logging.basicConfig(filename='app.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 
 st.set_page_config(page_title=config["assistant-name"], page_icon="🤖")
+
+# Pin the main block container's horizontal layout. Streamlit's "centered"
+# layout calculates the main column's padding from the measured sidebar
+# width, which is not yet available on the very first render — this causes
+# the title and chat input to appear shifted right until the user navigates
+# to another page and back. Forcing an explicit max-width + auto margins
+# keeps the layout consistent from the first paint onward.
+st.markdown(
+    """
+    <style>
+    [data-testid="stMainBlockContainer"],
+    [data-testid="stBottomBlockContainer"] {
+        max-width: none !important;
+        padding-left: 5rem !important;
+        padding-right: 5rem !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+inject_mobile_css()
 
 SESSION_IDLE_TIMEOUT_SECONDS = max(1, int(config["session_idle_timeout_seconds"]))
 
@@ -53,10 +78,20 @@ def render_agent_message(
     file_name: str,
     reasoning: str | None = None,
     show_thinking: bool = False,
+    activity_log: list[str] | None = None,
+    show_decision_explainer: bool = True,
 ) -> None:
     download_tag = config["download_markdown_tag"]
     download_content = f"{download_tag}\n\n{message_content}"
-    st.markdown(message_content)
+    # Feature: Markdown rendering — use unsafe_allow_html so inline HTML
+    # (e.g. tables, bold, code blocks) in agent responses renders correctly.
+    st.markdown(message_content, unsafe_allow_html=True)
+    # Feature: Agent Decision Explainer
+    if activity_log and show_decision_explainer:
+        with st.expander("🔍 How I answered this", expanded=False):
+            st.markdown("**Subagents and tools called:**")
+            for step in activity_log:
+                st.markdown(f"- {step}")
     if reasoning and show_thinking:
         with st.expander("🧠 Show thinking", expanded=False):
             st.markdown(reasoning)
@@ -82,19 +117,32 @@ st.title(config["assistant-name"])
 _ensure_session_thread()
 
 with st.sidebar:
+    # Rendered inside the sidebar so the (height=0) iframe component does not
+    # add visible vertical spacing above the chat area on the main page.
+    render_notification_bridge()
     st.subheader("Session")
     st.caption(f"Thread: `{st.session_state.thread_id[:14]}…`")
     st.caption(
         f"Idle timeout: {SESSION_IDLE_TIMEOUT_SECONDS // 60} min "
         f"({SESSION_IDLE_TIMEOUT_SECONDS}s)"
     )
-    show_thinking = st.toggle(
+    # Fix: use key= so Streamlit owns the state; avoid value= + manual write
+    # which causes the toggle to flip back on the following rerun.
+    if "show_thinking" not in st.session_state:
+        st.session_state.show_thinking = False
+    st.toggle(
         "Show agent thinking",
-        value=st.session_state.get("show_thinking", False),
+        key="show_thinking",
         help="Reveal the model's reasoning trace under each assistant message.",
     )
-    st.session_state.show_thinking = show_thinking
-    if st.button("Start new conversation", use_container_width=True):
+    if "show_decision_explainer" not in st.session_state:
+        st.session_state.show_decision_explainer = True
+    st.toggle(
+        "Show agent decisions",
+        key="show_decision_explainer",
+        help="Show which subagents and tools were called to answer each message.",
+    )
+    if st.button("Start new conversation", width='stretch'):
         try:
             reset_thread(st.session_state.thread_id)
         except Exception:  # noqa: BLE001
@@ -103,6 +151,9 @@ with st.sidebar:
         st.session_state.chat_history = []
         st.session_state.last_interaction_ts = time.monotonic()
         st.rerun()
+
+# Global Search sidebar widget + modal preview (persistent across pages)
+render_global_search()
 
 # conversation_start = invoke_agent("Without calling any tools, tell me what your capabilities are and greet me nicely!")
 
@@ -123,12 +174,39 @@ for index, message in enumerate(st.session_state.chat_history):
                 download_key=f"assistant-download-{index}",
                 file_name=f"agent-response-{index + 1}.md",
                 reasoning=message.get("reasoning"),
-                show_thinking=show_thinking,
+                show_thinking=st.session_state.show_thinking,
+                activity_log=message.get("activity_log"),
+                show_decision_explainer=st.session_state.show_decision_explainer,
             )
         else:
             st.markdown(message['content'])
 
+# ------------------------------------------------------------------
+# Feature: Quick-Action Chips — shown only when the chat is empty
+# ------------------------------------------------------------------
+_QUICK_ACTIONS = [
+    "What's the weather today?",
+    "What's my morning routine?",
+    "Show my task list",
+    "Show my shopping list",
+    "What time is it?",
+    "Search the web for latest news",
+]
+
+if not st.session_state.chat_history:
+    st.markdown("**Quick actions — tap to get started:**")
+    chip_cols = st.columns(3)
+    for chip_idx, chip_label in enumerate(_QUICK_ACTIONS):
+        if chip_cols[chip_idx % 3].button(chip_label, key=f"chip_{chip_idx}", use_container_width=True):
+            st.session_state["_chip_prompt"] = chip_label
+            st.rerun()
+
+# Apply a chip prompt that was selected on the previous rerun.
+_chip_prompt = st.session_state.pop("_chip_prompt", None)
+
 prompt = st.chat_input("Say Something")
+# Merge chip prompt with typed prompt (chip takes priority when no typed input).
+prompt = prompt or _chip_prompt
 if prompt:
     st.session_state.last_interaction_ts = time.monotonic()
     with st.chat_message("user"):
@@ -214,13 +292,16 @@ if prompt:
                     download_key=f"assistant-download-live-{len(st.session_state.chat_history)}",
                     file_name="agent-response-latest.md",
                     reasoning=stored_reasoning,
-                    show_thinking=show_thinking,
+                    show_thinking=st.session_state.show_thinking,
+                    activity_log=activity_log or None,
+                    show_decision_explainer=st.session_state.show_decision_explainer,
                 )
             st.session_state.chat_history.append(
                 {
                     "role": "assistant",
                     "content": display_text,
                     "reasoning": stored_reasoning,
+                    "activity_log": activity_log or None,
                 }
             )
             st.session_state.last_interaction_ts = time.monotonic()

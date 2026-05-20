@@ -1,7 +1,7 @@
 from langchain_ollama import ChatOllama
 from langchain.agents import AgentState, create_agent
 from config.config import config
-from subagents.subagent_tools import weather_agent_tool, exercise_agent_tool, date_and_time_agent_tool, stem_agent_tool, coder_agent_tool, task_manager_agent_tool, email_agent_tool, cta_bus_agent_tool, cta_train_agent_tool, daily_routine_agent_tool
+from subagents.subagent_tools import weather_agent_tool, exercise_agent_tool, date_and_time_agent_tool, stem_agent_tool, coder_agent_tool, task_manager_agent_tool, email_agent_tool, cta_bus_agent_tool, cta_train_agent_tool, daily_routine_agent_tool, shopping_list_agent_tool, web_search_agent_tool, book_agent_tool
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
 from langchain.agents.middleware import before_model, wrap_tool_call
@@ -51,6 +51,11 @@ The assistances you manage are:
 - cta_bus_agent_tool: This agent handles all Chicago CTA bus inquiries (predicted bus arrival times at a stop, by stop id or by route+direction+stop name; or predictions for stops near a lat/lng or address on a given route). Use this for any CTA bus question.
 - cta_train_agent_tool: This agent handles all Chicago CTA 'L' train inquiries (predicted train arrival times at a station, by station id or station name; or predictions for stations near a lat/lng or address). Use this for any CTA train/rail question.
 - daily_routine_agent_tool: This agent tracks the user's daily morning and night routines. Use it for any request about completing, uncompleting, listing, or reporting on routine items, or for showing today's morning/night completion percentage.
+- shopping_list_agent_tool: This agent manages the user's shopping list. Use it for any request to add, delete, complete (mark as bought), update, view, or filter shopping list items.
+- web_search_agent_tool: This agent searches the web and extracts page content. Use it for any request that requires up-to-date information from the internet, finding websites, or reading specific URLs.
+- book_agent_tool: This agent manages the user's reading list. Use it for any request to add, update, list, or delete books. It tracks books the user wants to read, is reading, has read, or did not finish.
+
+**Default fallback rule**: If no specific tool exists for a task, always use `web_search_agent_tool` as a fallback before answering from memory. When you do so, tell the user you are searching the web.
 
 Loop-prevention rules (follow strictly):
 - Call each subagent at most once per user turn unless the user has supplied new
@@ -186,7 +191,10 @@ agent = create_agent(
            email_agent_tool,
            cta_bus_agent_tool,
            cta_train_agent_tool,
-           daily_routine_agent_tool],
+           daily_routine_agent_tool,
+           shopping_list_agent_tool,
+           web_search_agent_tool,
+           book_agent_tool],
     middleware=[monitor_tool, dedupe_tool, monitor_model, trim_messages],
     system_prompt=SYSTEM_PROMPT, 
     checkpointer=agent_checkpointer,)

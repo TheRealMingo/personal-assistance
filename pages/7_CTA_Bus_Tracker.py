@@ -1,6 +1,8 @@
 """Streamlit page for browsing CTA Bus Tracker predictions."""
 
 from __future__ import annotations
+from utils.mobile_css import inject_mobile_css
+from utils.global_search_sidebar import render_global_search
 
 import json
 import logging
@@ -21,6 +23,8 @@ except ImportError:  # graceful fallback if not installed yet
     streamlit_geolocation = None  # type: ignore[assignment]
 
 from utils.browser_geolocation import render_browser_location_widget
+from utils.browser_notifications import render_cta_arrival_notifications
+from config.runtime_settings import get_setting
 from tools.cta_bus_tool import (
     DATA_DIR,
     cta_get_directions,
@@ -39,6 +43,8 @@ logging.basicConfig(
 )
 
 st.set_page_config(page_title="CTA Bus Tracker", page_icon="🚌", layout="wide")
+inject_mobile_css()
+render_global_search()
 
 FAVORITES_PATH = DATA_DIR / "cta_favorite_stops.json"
 
@@ -183,7 +189,7 @@ def _render_result(result: Any) -> None:
         return
     if result.get("ambiguous"):
         st.warning(result.get("message", "Multiple stops matched."))
-        st.dataframe(pd.DataFrame(result.get("candidates", [])), use_container_width=True)
+        st.dataframe(pd.DataFrame(result.get("candidates", [])), width='stretch')
         return
     if "message" in result and not result.get("predictions"):
         st.info(result["message"])
@@ -207,7 +213,7 @@ def _render_result(result: Any) -> None:
         st.markdown("**Routes near this location**")
         st.dataframe(
             pd.DataFrame(result["routes"]),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -215,11 +221,11 @@ def _render_result(result: Any) -> None:
     if df.empty:
         st.info("No upcoming predictions.")
     else:
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width='stretch', hide_index=True)
 
     if "stops" in result and result["stops"]:
         with st.expander("Stops within radius"):
-            st.dataframe(pd.DataFrame(result["stops"]), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(result["stops"]), width='stretch', hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +302,12 @@ with tab_stop:
             with st.spinner("Calling CTA Bus Tracker…"):
                 result = get_bus_predictions_for_stop_tool.invoke(query["payload"])
             _render_result(result)
+            if refresh_ms > 0 and isinstance(result, dict):
+                render_cta_arrival_notifications(
+                    result.get("predictions") or [],
+                    int(get_setting("cta_arrival_notify_minutes", 5)),
+                    "bus",
+                )
             if isinstance(result, dict) and result.get("stop_id") and not result.get("error"):
                 rid = str(result["stop_id"])
                 rname = result.get("stop_name") or query.get("stop") or rid
@@ -356,6 +368,12 @@ with tab_stop:
                     byrdn_query["payload"]
                 )
             _render_result(result)
+            if refresh_ms > 0 and isinstance(result, dict):
+                render_cta_arrival_notifications(
+                    result.get("predictions") or [],
+                    int(get_setting("cta_arrival_notify_minutes", 5)),
+                    "bus",
+                )
             if (
                 isinstance(result, dict)
                 and result.get("stop_id")
@@ -504,6 +522,12 @@ with tab_nearby:
                     nearby_query["payload"]
                 )
         _render_result(result)
+        if refresh_ms > 0 and isinstance(result, dict):
+            render_cta_arrival_notifications(
+                result.get("predictions") or [],
+                int(get_setting("cta_arrival_notify_minutes", 5)),
+                "bus",
+            )
         _render_favorite_picker_for_nearby(
             result,
             slot="nearby",
@@ -551,7 +575,7 @@ with tab_browse:
                             for s in stops
                         ]
                     )
-                    st.dataframe(stops_df, use_container_width=True, hide_index=True)
+                    st.dataframe(stops_df, width='stretch', hide_index=True)
                     pick = st.selectbox(
                         "Pick a stop to view predictions",
                         options=stops_df["Stop ID"].astype(str).tolist(),
@@ -573,6 +597,12 @@ with tab_browse:
                                 browse_query["payload"]
                             )
                         _render_result(result)
+                        if refresh_ms > 0 and isinstance(result, dict):
+                            render_cta_arrival_notifications(
+                                result.get("predictions") or [],
+                                int(get_setting("cta_arrival_notify_minutes", 5)),
+                                "bus",
+                            )
                         if isinstance(result, dict) and not result.get("error"):
                             rid = browse_query.get("pick", str(pick))
                             rname = result.get("stop_name") or rid
@@ -622,6 +652,12 @@ with tab_favs:
                             {"stop_id": fav["stop_id"], "route": fav.get("route")}
                         )
                     _render_result(result)
+                    if refresh_ms > 0 and isinstance(result, dict):
+                        render_cta_arrival_notifications(
+                            result.get("predictions") or [],
+                            int(get_setting("cta_arrival_notify_minutes", 5)),
+                            "bus",
+                        )
                 pending_key = "fav_pending_remove"
                 if st.session_state.get(pending_key) == fav_token:
                     cols[2].button(

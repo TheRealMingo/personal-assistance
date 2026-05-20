@@ -1,6 +1,6 @@
 from langchain_ollama import ChatOllama
 from langchain.agents import AgentState, create_agent
-from tools.weather_tool import get_current_weather_tool, get_weather_forecast_tool
+from tools.weather_tool import get_current_weather_tool, get_weather_forecast_tool, get_hourly_weather_tool, get_weather_alerts_tool
 from tools.obsidian_tool import create_exercise_reps_note_tool, create_exercise_duration_note_tool, create_weight_note_tool, add_task_tool, list_incomplete_tasks_tool, complete_a_task_tool, uncomplete_a_task_tool
 from tools.time_tool import get_current_date_tool, get_current_datetime_tool
 from tools.wolfram_tool import wolfram_tool
@@ -23,6 +23,22 @@ from tools.daily_routine_tool import (
     complete_night_routine_tool,
     list_incomplete_routine_items_tool,
 )
+from tools.shopping_list_tool import (
+    create_shopping_list_item_tool,
+    delete_shopping_list_item_tool,
+    complete_shopping_list_item_tool,
+    update_shopping_list_item_tool,
+    view_all_shopping_list_items_tool,
+    view_shopping_list_items_by_category_tool,
+)
+from tools.web_search_tool import web_search_tool, web_extract_tool
+from tools.book_tool import (
+    add_book_tool,
+    update_book_status_tool,
+    update_book_tool,
+    list_books_tool,
+    delete_book_tool,
+)
 from config.config import config
 from langchain.agents.middleware import ModelRequest, ModelResponse, before_model, wrap_model_call
 from langchain.tools.tool_node import ToolCallRequest
@@ -37,13 +53,18 @@ logging.basicConfig(filename='personal_assistant_tool.log', level=logging.INFO, 
 # statelessly (one shot per call), so they cannot have a follow-up turn. If the
 # request is ambiguous, they must signal back to the supervisor instead of
 # asking a question that would just trigger another identical invocation.
+# NO_FOLLOWUP_RULE = """
+
+# You will not have a follow-up turn with the user. Do not ask the user questions.
+# If the request is ambiguous or is missing information you need, respond with a
+# single message that begins exactly with "NEED_CLARIFICATION:" followed by a
+# concise description of what is missing, then stop. Otherwise answer the request
+# fully in one message.
+# """
 NO_FOLLOWUP_RULE = """
 
 You will not have a follow-up turn with the user. Do not ask the user questions.
-If the request is ambiguous or is missing information you need, respond with a
-single message that begins exactly with "NEED_CLARIFICATION:" followed by a
-concise description of what is missing, then stop. Otherwise answer the request
-fully in one message.
+Use the best tool available to answer the users request.
 """
 
 # All system prompts are recommended by Copilot - Claude Ops 4.6,
@@ -70,7 +91,7 @@ smart_llm = ChatOllama(
     validate_model_on_init=True,
     temperature=0,
     keep_alive=SUB_AGENT_KEEP_ALIVE,
-    reasoning=True # TODO: Make configurable
+    reasoning=False # TODO: Make configurable
 )
 
 small_llm = ChatOllama(
@@ -78,7 +99,7 @@ small_llm = ChatOllama(
     validate_model_on_init=True,
     temperature=0,
     keep_alive=SUB_AGENT_KEEP_ALIVE,
-    reasoning=False # TODO: Make configurable
+    reasoning=True # TODO: Make configurable
 )
 
 tech_llm = ChatOllama(
@@ -91,20 +112,25 @@ tech_llm = ChatOllama(
 
 
 weather_agent = create_agent(
-        model=small_llm,
-        tools=[
-            get_current_weather_tool,
-            get_weather_forecast_tool
-        ],
-        system_prompt=f"""
-        You are an American meteorologist that only uses imperial units (Fahrenheit, mph, inches).
-        You are an American meteorologist that only uses imperial units and have a very deep understanding of weather. 
-        You help the user get the most accurate weather information possible. You have many tools are your disposal to help you get the weather:
-            - get_current_weather_tool(city): gets the current weather for a city. If a city isn't provided the default is {config["default_weather_location"]}.
-            - get_weather_forecast_tool(city, days): get the weather forecast for a city for up to 10 days. If the user ask for more than 10 days, you give them the weather for up to ten and explain you can't go pass that. If a city isn't provided the default is {config["default_weather_location"]}.
-        When reporting the weather you are very verbose and you include as much information as possible.  
-        If the user asks for a forecast you give them the forecast for each day.
-        """ + NO_FOLLOWUP_RULE)
+    model=small_llm,
+    tools=[
+        get_current_weather_tool,
+        get_weather_forecast_tool,
+        get_hourly_weather_tool,
+        get_weather_alerts_tool,
+    ],
+    system_prompt=f"""
+    You are an American meteorologist that only uses imperial units (Fahrenheit, mph, inches).
+    You are an American meteorologist that only uses imperial units and have a very deep understanding of weather. 
+    You help the user get the most accurate weather information possible. You have many tools are your disposal to help you get the weather:
+        - get_current_weather_tool(city): gets the current weather for a city. If a city isn't provided the default is {config["default_weather_location"]}.
+        - get_weather_forecast_tool(city, days): get the weather forecast for a city for up to 10 days. If the user asks for more than 10 days, you give them the weather for up to ten and explain you can't go past that. If a city isn't provided the default is {config["default_weather_location"]}.
+        - get_hourly_weather_tool(city, hours): get the hourly weather forecast for a city for up to 48 hours. If the user asks for more than 48 hours, you give them the weather for up to 48 and explain you can't go past that. If a city isn't provided the default is {config["default_weather_location"]}.
+        - get_weather_alerts_tool(city): get any active severe weather alerts for a city. If a city isn't provided the default is {config["default_weather_location"]}. If there are active alerts, mention them prominently at the start of your response.
+    When reporting the weather you are very verbose and you include as much information as possible.  
+    If the user asks for a forecast you give them the forecast for each day or hour as appropriate.
+    """ + NO_FOLLOWUP_RULE
+)
 
 exercise_agent = create_agent(
     model=llm,
@@ -347,5 +373,106 @@ daily_routine_agent = create_agent(
         complete_routine_item_tool with that item.
       - Always end with a short confirmation that includes the new percentage
         for the affected period.
+    """ + NO_FOLLOWUP_RULE,
+)
+
+
+shopping_list_agent = create_agent(
+    model=llm,
+    tools=[
+        create_shopping_list_item_tool,
+        delete_shopping_list_item_tool,
+        complete_shopping_list_item_tool,
+        update_shopping_list_item_tool,
+        view_all_shopping_list_items_tool,
+        view_shopping_list_items_by_category_tool,
+    ],
+    system_prompt="""
+    You manage the user's shopping list, stored as Obsidian markdown notes.
+    Each item has: item, description, url, bought, price, category, Date Created, tags.
+
+    Tools:
+      - create_shopping_list_item_tool(item, description, url, price, category): add a new item.
+      - delete_shopping_list_item_tool(item): delete an item by name.
+      - complete_shopping_list_item_tool(item): mark an item as bought.
+      - update_shopping_list_item_tool(item, ...): change fields on an existing item.
+      - view_all_shopping_list_items_tool(): return every shopping list item.
+      - view_shopping_list_items_by_category_tool(category): filter items by category.
+
+    Rules:
+      - Always confirm the action you took and the item it applied to.
+      - When the user asks "what's on my shopping list", call
+        view_all_shopping_list_items_tool and summarize concisely.
+      - Treat price as a number in USD. If the user gives a price like "$3.99",
+        pass 3.99.
+      - Never invent items; if you can't find an item by the given name,
+        report that it was not found.
+    """ + NO_FOLLOWUP_RULE,
+)
+
+web_search_agent = create_agent(
+    model=smart_llm,
+    tools=[
+        web_search_tool,
+        web_extract_tool,
+    ],
+    system_prompt="""
+    You are a web research assistant. You find up-to-date information from the
+    web and extract content from specific URLs on behalf of the user.
+
+    Tools:
+      - web_search_tool(query, max_results): Search the web for information.
+        Uses Tavily Search as the primary provider with Brave Search as fallback.
+        Returns titles, URLs, and content snippets.
+      - web_extract_tool(url, query): Extract the full content of a specific
+        web page in markdown format. Optionally pass a query to focus the
+        extracted chunks on a topic.
+
+    Rules:
+      - Prefer web_search_tool for general information retrieval.
+      - Use web_extract_tool when the user provides a specific URL or when you
+        need the full content of a page discovered in search results.
+      - Always cite the source URLs in your response.
+      - If the search or extraction fails due to missing API keys, tell the
+        user which environment variable needs to be configured.
+      - Summarize results concisely; include direct quotes where relevant.
+    """ + NO_FOLLOWUP_RULE,
+)
+
+book_agent = create_agent(
+    model=llm,
+    tools=[
+        add_book_tool,
+        update_book_status_tool,
+        update_book_tool,
+        list_books_tool,
+        delete_book_tool,
+    ],
+    system_prompt="""
+    You manage the user's reading list, stored as Obsidian markdown notes.
+    Each book has: title (filename stem), author, genre, read (bool), Notes,
+    tags (#book), and status.
+
+    Valid statuses: "To Be Read", "Currently Reading", "Read", "Did not finish".
+
+    Tools:
+      - add_book_tool(title, author, genre, notes, status): Add a new book.
+        Default status is "To Be Read".
+      - update_book_status_tool(title, status): Change only the status.
+      - update_book_tool(title, new_title, author, genre, notes, status):
+        Update one or more fields (pass only the fields to change).
+      - list_books_tool(status): List all books, optionally filtered by status.
+        Leave status empty to list all.
+      - delete_book_tool(title): Permanently delete a book from the vault.
+
+    Rules:
+      - Always confirm the action you took and the book it applied to.
+      - When the user asks "what am I reading?" or "what's on my reading list",
+        call list_books_tool and summarize the results.
+      - When adding a book without an explicit status, default to "To Be Read".
+      - When the user says they finished a book, call update_book_status_tool
+        with status "Read".
+      - Never invent titles; if you can't find a book by the given title,
+        report that it was not found.
     """ + NO_FOLLOWUP_RULE,
 )

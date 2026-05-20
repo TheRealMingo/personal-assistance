@@ -1,6 +1,8 @@
 """Streamlit page for browsing CTA Train Tracker arrivals."""
 
 from __future__ import annotations
+from utils.mobile_css import inject_mobile_css
+from utils.global_search_sidebar import render_global_search
 
 import json
 import logging
@@ -21,6 +23,8 @@ except ImportError:
     streamlit_geolocation = None  # type: ignore[assignment]
 
 from utils.browser_geolocation import render_browser_location_widget
+from utils.browser_notifications import render_cta_arrival_notifications
+from config.runtime_settings import get_setting
 from tools.cta_train_tool import (
     DATA_DIR,
     ROUTE_COLUMN_TO_CTA,
@@ -36,6 +40,8 @@ logging.basicConfig(
 )
 
 st.set_page_config(page_title="CTA Train Tracker", page_icon="🚆", layout="wide")
+inject_mobile_css()
+render_global_search()
 
 FAVORITES_PATH = DATA_DIR / "cta_favorite_stations.json"
 
@@ -250,7 +256,7 @@ def _render_result(result: Any) -> None:
         st.warning(result.get("message", "Multiple stations matched."))
         st.dataframe(
             pd.DataFrame(result.get("candidates", [])),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
         return
@@ -286,11 +292,11 @@ def _render_result(result: Any) -> None:
             routes_df = routes_df[[c for c in cols_order if c in routes_df.columns]]
             st.dataframe(
                 _style_rows_by_line(routes_df, line_col="route"),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
         else:
-            st.dataframe(routes_df, use_container_width=True, hide_index=True)
+            st.dataframe(routes_df, width='stretch', hide_index=True)
 
     df = _predictions_dataframe(result.get("predictions", []))
     if df.empty:
@@ -298,7 +304,7 @@ def _render_result(result: Any) -> None:
     else:
         st.dataframe(
             _style_rows_by_line(df, line_col="route"),
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
         )
 
@@ -308,13 +314,13 @@ def _render_result(result: Any) -> None:
             if "routes" in stations_df.columns:
                 st.dataframe(
                     _style_rows_by_line(stations_df, routes_col="routes"),
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
             else:
                 st.dataframe(
                     stations_df,
-                    use_container_width=True,
+                    width='stretch',
                     hide_index=True,
                 )
 
@@ -444,6 +450,12 @@ with tab_station:
         with st.spinner("Calling CTA Train Tracker…"):
             result = get_train_arrivals_for_station_tool.invoke(station_query["payload"])
         _render_result(result)
+        if refresh_ms > 0 and isinstance(result, dict):
+            render_cta_arrival_notifications(
+                result.get("predictions") or [],
+                int(get_setting("cta_arrival_notify_minutes", 5)),
+                "train",
+            )
         if isinstance(result, dict) and result.get("station_id") and not result.get("error"):
             sid = str(result["station_id"])
             sname = (
@@ -539,6 +551,12 @@ with tab_nearby:
         with st.spinner("Calling CTA Train Tracker for each nearby station…"):
             result = get_all_nearby_train_arrivals_tool.invoke(train_nearby_query)
         _render_result(result)
+        if refresh_ms > 0 and isinstance(result, dict):
+            render_cta_arrival_notifications(
+                result.get("predictions") or [],
+                int(get_setting("cta_arrival_notify_minutes", 5)),
+                "train",
+            )
         _render_favorite_picker_for_nearby(
             result,
             slot="train_nearby",
@@ -576,7 +594,7 @@ with tab_browse:
             )
             st.dataframe(
                 _style_rows_by_line(stations_df, fixed_line=line_rt),
-                use_container_width=True,
+                width='stretch',
                 hide_index=True,
             )
             pick_label = st.selectbox(
@@ -611,6 +629,12 @@ with tab_browse:
                         browse_train_query["payload"]
                     )
                 _render_result(br_result)
+                if refresh_ms > 0 and isinstance(br_result, dict):
+                    render_cta_arrival_notifications(
+                        br_result.get("predictions") or [],
+                        int(get_setting("cta_arrival_notify_minutes", 5)),
+                        "train",
+                    )
                 if isinstance(br_result, dict) and not br_result.get("error"):
                     sid = browse_train_query.get("pick", "")
                     sname = (
@@ -669,6 +693,12 @@ with tab_favs:
                     with st.spinner("Calling CTA Train Tracker…"):
                         result = get_train_arrivals_for_station_tool.invoke(payload)
                     _render_result(result)
+                    if refresh_ms > 0 and isinstance(result, dict):
+                        render_cta_arrival_notifications(
+                            result.get("predictions") or [],
+                            int(get_setting("cta_arrival_notify_minutes", 5)),
+                            "train",
+                        )
                 pending_key = "fav_train_pending_remove"
                 if st.session_state.get(pending_key) == fav_token:
                     cols[2].button(

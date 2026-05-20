@@ -15,9 +15,12 @@ forms on the page can consume them.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Optional
 
 import streamlit as st
+
+logger = logging.getLogger(__name__)
 
 try:
     from streamlit_js_eval import get_geolocation, streamlit_js_eval
@@ -64,12 +67,14 @@ def _store_coords(coords: dict[str, Any]) -> None:
     lat = coords.get("latitude")
     lng = coords.get("longitude")
     if lat is None or lng is None:
+        logger.warning("Received coords dict missing latitude/longitude; ignoring.")
         return
     st.session_state[SESSION_KEY] = {
         "lat": float(lat),
         "lng": float(lng),
         "accuracy": coords.get("accuracy"),
     }
+    logger.info(f"Browser location stored: lat={lat}, lng={lng}, accuracy={coords.get('accuracy')}")
 
 
 def render_browser_location_widget(key_prefix: str = "geo") -> Optional[dict[str, Any]]:
@@ -87,16 +92,16 @@ def render_browser_location_widget(key_prefix: str = "geo") -> Optional[dict[str
     cols = st.columns([1, 1])
     with cols[0]:
         if st.button(
-            "📍 Get my current location",
+            "📍 Use my location",
             key=f"{key_prefix}_get_loc_btn",
-            use_container_width=True,
+            width='stretch',
         ):
             st.session_state[request_key] = True
     with cols[1]:
         if st.button(
             "Clear location",
             key=f"{key_prefix}_clear_loc_btn",
-            use_container_width=True,
+            width='stretch',
         ):
             st.session_state.pop(SESSION_KEY, None)
             st.session_state[request_key] = False

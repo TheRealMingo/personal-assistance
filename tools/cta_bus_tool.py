@@ -23,12 +23,14 @@ import time
 from datetime import datetime, timezone as _timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import googlemaps
 import requests
 from langchain.tools import tool
 
 from config.config import config
+from tools.api_call_tracker import record_api_call as _record_central_api_call
 
 logging.basicConfig(
     filename="personal_assistant_tool.log",
@@ -92,6 +94,7 @@ def _record_api_call() -> int:
         CALL_COUNT_PATH.write_text(json.dumps(state), encoding="utf-8")
     except OSError as exc:
         logging.warning(f"Could not persist CTA call counter: {exc}")
+    _record_central_api_call("cta_bus")
     count = state["count"]
     if count == DAILY_CALL_WARN_THRESHOLD:
         logging.warning(
@@ -118,7 +121,9 @@ def _api_get(endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
     _record_api_call()
     full_params = {"key": api_key, "format": "json", **params}
     url = f"{CTA_BASE_URL}/{endpoint}"
-    logging.info(f"CTA API GET {endpoint} params={ {k:v for k,v in full_params.items() if k != 'key'} }")
+    safe_params = {k: v for k, v in full_params.items() if k != "key"}
+    logged_url = f"{url}?{urlencode({**safe_params, 'key': 'REDACTED'})}"
+    logging.info(f"CTA Bus API GET {logged_url}")
     try:
         resp = requests.get(url, params=full_params, timeout=15)
         resp.raise_for_status()
@@ -126,6 +131,7 @@ def _api_get(endpoint: str, params: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError(f"CTA API request to {endpoint} failed: {exc}") from exc
 
     data = resp.json().get("bustime-response", {})
+    logging.info(f"CTA Bus API response from {endpoint}: {data}")
     if "error" in data and not _has_useful_payload(data):
         # All errors and no useful data — surface them.
         msgs = "; ".join(e.get("msg", "") for e in data["error"])

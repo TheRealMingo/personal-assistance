@@ -14,7 +14,7 @@ logging.basicConfig(filename='personal_assistant_tool.log', level=logging.INFO, 
 
 
 def create_exercise_json(exercise: str, date: str, reps_or_duration: int, sets: int, weight: float, muscle_group: str = None) -> dict:
-    weight_data = f"{weight} Ibs" if weight != 0 and weight != None else "bodyweight"
+    weight_data = f"{weight} lbs" if weight != 0 and weight != None else "bodyweight"
     exercise_data = {
         "Exercise": exercise.title(),
         "Date": date,

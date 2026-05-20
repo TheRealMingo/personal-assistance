@@ -1,6 +1,8 @@
 """Streamlit page for browsing weight history from the Obsidian vault."""
 
 from __future__ import annotations
+from utils.mobile_css import inject_mobile_css
+from utils.global_search_sidebar import render_global_search
 
 import logging
 import re
@@ -11,7 +13,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 import altair as alt
-from yaml import safe_load
+from yaml import safe_load, dump as yaml_dump
 
 from config.config import config
 from tools.obsidian_tool import create_weight_note_tool
@@ -23,6 +25,8 @@ logging.basicConfig(
 )
 
 st.set_page_config(page_title="Weight History", page_icon="⚖️", layout="wide")
+inject_mobile_css()
+render_global_search()
 
 FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*", re.DOTALL)
 NUMBER_RE = re.compile(r"([-+]?\d*\.?\d+)")
@@ -87,7 +91,7 @@ def load_weights(vault_path: str) -> pd.DataFrame:
             {
                 "Date": parsed_date,
                 "Weight (lbs)": weight_lbs,
-                "File": file.name,
+                "File": str(file.resolve()),
             }
         )
 
@@ -97,6 +101,92 @@ def load_weights(vault_path: str) -> pd.DataFrame:
             drop=True
         )
     return df
+
+
+# ---------------------------------------------------------------------------
+# Note update / delete helpers
+# ---------------------------------------------------------------------------
+
+
+def _update_weight_note(file_path: str, new_dt: datetime, new_weight: float) -> None:
+    """Rewrite the YAML frontmatter of a weight note with updated date and weight."""
+    p = Path(file_path)
+    if not p.exists():
+        raise FileNotFoundError(f"File not found: {file_path}")
+    text = p.read_text(encoding="utf-8")
+    m = FRONTMATTER_RE.match(text)
+    if not m:
+        raise ValueError("No YAML frontmatter found in note.")
+    data = safe_load(m.group(1)) or {}
+    if not isinstance(data, dict):
+        data = {}
+    key_map = {str(k).strip().lower(): k for k in data.keys()}
+    data[key_map.get("date", "Date")] = new_dt.strftime("%Y-%m-%dT%H:%M:%S")
+    data[key_map.get("weight", "Weight")] = new_weight
+    new_fm = f"---\n{yaml_dump(data, sort_keys=False, allow_unicode=True)}---\n"
+    p.write_text(FRONTMATTER_RE.sub(new_fm, text, count=1), encoding="utf-8")
+
+
+@st.dialog("Edit weight entry")
+def _edit_weight_dialog(row: Any, file_path: str) -> None:
+    st.caption(f"File: `{Path(file_path).name}`")
+    raw_date = row["Date"]
+    if pd.notna(raw_date):
+        dt_val = pd.Timestamp(raw_date).to_pydatetime()
+        date_default = dt_val.date()
+        time_default = dt_val.time().replace(second=0, microsecond=0)
+    else:
+        _now = datetime.now()
+        date_default = _now.date()
+        time_default = _now.time().replace(second=0, microsecond=0)
+    c1, c2 = st.columns(2)
+    with c1:
+        new_date = st.date_input("Date", value=date_default)
+    with c2:
+        new_time = st.time_input("Time", value=time_default, step=60)
+    new_weight = st.number_input(
+        "Weight (lbs)",
+        min_value=0.0,
+        max_value=1000.0,
+        value=float(row["Weight (lbs)"]),
+        step=0.1,
+        format="%.1f",
+    )
+    btn_cols = st.columns(2)
+    if btn_cols[0].button("💾 Save", type="primary", width='stretch', key="weight_edit_save"):
+        try:
+            combined_dt = datetime.combine(new_date, new_time)
+            _update_weight_note(file_path, combined_dt, new_weight)
+            load_weights.clear()
+            st.session_state.pop("weight_table", None)
+            st.toast("Weight entry updated.", icon="✅")
+            st.rerun()
+        except Exception as exc:
+            st.error(f"Failed to update: {exc}")
+    if btn_cols[1].button("Cancel", width='stretch', key="weight_edit_cancel"):
+        st.session_state.pop("weight_table", None)
+        st.rerun()
+    st.divider()
+    if st.session_state.get("confirm_delete_weight"):
+        st.warning("⚠️ **Permanently delete this entry?** This cannot be undone.")
+        d_cols = st.columns(2)
+        if d_cols[0].button("Yes, delete", type="primary", width='stretch', key="weight_del_confirm"):
+            try:
+                Path(file_path).unlink()
+                load_weights.clear()
+                st.session_state.pop("confirm_delete_weight", None)
+                st.session_state.pop("weight_table", None)
+                st.toast("Weight entry deleted.", icon="🗑️")
+                st.rerun()
+            except Exception as exc:
+                st.error(f"Could not delete: {exc}")
+        if d_cols[1].button("No, keep", width='stretch', key="weight_del_cancel"):
+            st.session_state.pop("confirm_delete_weight", None)
+            st.rerun()
+    else:
+        if st.button("🗑️ Delete entry", key="weight_del_btn"):
+            st.session_state["confirm_delete_weight"] = True
+            st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -211,19 +301,27 @@ st.subheader("All Weights")
 if filtered.empty:
     st.info("No weight entries to display.")
 else:
-    st.caption("Click a column header to sort.")
+    st.caption("Click a row to edit or delete.")
     table_df = filtered.drop(columns=["File"]).reset_index(drop=True)
-    st.dataframe(
+    sel_state = st.dataframe(
         table_df,
-        use_container_width=True,
+        width='stretch',
         hide_index=True,
+        on_select="rerun",
+        selection_mode="single-row",
         column_config={
             "Date": st.column_config.DatetimeColumn("Date", format="YYYY-MM-DD HH:mm"),
             "Weight (lbs)": st.column_config.NumberColumn(
                 "Weight (lbs)", format="%.1f"
             ),
         },
+        key="weight_table",
     )
+    sel_rows = getattr(getattr(sel_state, "selection", None), "rows", None) or []
+    if sel_rows:
+        sel_idx = int(sel_rows[0])
+        sel_row = filtered.reset_index(drop=True).iloc[sel_idx]
+        _edit_weight_dialog(sel_row, str(sel_row["File"]))
 
 # --- Trend chart -----------------------------------------------------------
 st.subheader("Progress Over Time")
@@ -319,4 +417,4 @@ else:
                 )
                 .properties(height=400)
             )
-            st.altair_chart(chart, use_container_width=True)
+            st.altair_chart(chart, width='stretch')  # altair uses width='stretch'

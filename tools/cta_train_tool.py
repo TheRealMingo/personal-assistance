@@ -26,12 +26,14 @@ import time
 from datetime import datetime, timezone as _timezone
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import urlencode
 
 import googlemaps
 import requests
 from langchain.tools import tool
 
 from config.config import config
+from tools.api_call_tracker import record_api_call as _record_central_api_call
 
 logging.basicConfig(
     filename="personal_assistant_tool.log",
@@ -111,6 +113,7 @@ def _record_train_api_call() -> int:
         TRAIN_CALL_COUNT_PATH.write_text(json.dumps(state), encoding="utf-8")
     except OSError as exc:
         logging.warning(f"Could not persist CTA Train call counter: {exc}")
+    _record_central_api_call("cta_train")
     count = state["count"]
     if count == TRAIN_DAILY_CALL_WARN_THRESHOLD:
         logging.warning(
@@ -146,7 +149,8 @@ def _train_api_get(
     full_params = {"key": api_key, "outputType": "JSON", **params}
     url = f"{TRAIN_BASE_URL}/{endpoint}"
     safe_params = {k: v for k, v in full_params.items() if k != "key"}
-    logging.info(f"CTA Train API GET {endpoint} params={safe_params}")
+    logged_url = f"{url}?{urlencode({**safe_params, 'key': 'REDACTED'})}"
+    logging.info(f"CTA Train API GET {logged_url}")
     try:
         resp = requests.get(url, params=full_params, timeout=15)
         resp.raise_for_status()
@@ -156,6 +160,7 @@ def _train_api_get(
         ) from exc
 
     body = resp.json().get("ctatt", {})
+    logging.info(f"CTA Train API response from {endpoint}: {body}")
     err_code = str(body.get("errCd", "0"))
     err_msg = body.get("errNm")
     if err_code != "0" and not body.get("eta"):
@@ -299,6 +304,8 @@ def cta_get_train_station_catalog(force_refresh: bool = False) -> dict[str, Any]
             return cached
 
     logging.info("Fetching CTA Train station catalog from Chicago Data Portal ...")
+    catalog_url = f"{CHICAGO_DATA_PORTAL_L_STOPS_URL}?{urlencode({'$limit': 1000})}"
+    logging.info(f"CTA Train station catalog URL: {catalog_url}")
     try:
         # Default page size on Data Portal is 1000; the dataset has ~300 rows.
         resp = requests.get(
@@ -308,6 +315,7 @@ def cta_get_train_station_catalog(force_refresh: bool = False) -> dict[str, Any]
         )
         resp.raise_for_status()
         rows = resp.json()
+        logging.info(f"CTA Train station catalog response: {len(rows)} rows received")
     except requests.RequestException as exc:
         raise RuntimeError(
             f"Could not fetch CTA L stops from Chicago Data Portal: {exc}"

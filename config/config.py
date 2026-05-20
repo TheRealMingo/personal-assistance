@@ -25,6 +25,13 @@ config = {
     "obsidian_vault_weight_path": os.getenv("OBSIDIAN_VAULT_WEIGHT_PATH", "."),
     "obsidian_vault_task_list_path": os.getenv("OBSIDIAN_VAULT_TASK_LIST_PATH", "."),
     "obsidian_vault_daily_routine_path": os.getenv("OBSIDIAN_VAULT_DAILY_ROUTINE_PATH", "."),
+    "obsidian_vault_shopping_list_path": os.getenv("OBSIDIAN_VAULT_SHOPPING_LIST_PATH", "."),
+    "obsidian_vault_book_path": os.getenv("OBSIDIAN_VAULT_BOOK_PATH", "."),
+    # Email address sent to Open Library as contact info in the User-Agent header
+    "book_tracker_contact_email": os.getenv("BOOK_TRACKER_CONTACT_EMAIL"),
+    # Full User-Agent string for Open Library API requests; defaults to a
+    # generated value using book_tracker_contact_email if not set explicitly
+    "book_tracker_user_agent": os.getenv("BOOK_TRACKER_USER_AGENT"),
     "google_maps_api_key": os.getenv("GOOGLE_MAPS_API_KEY"),
     "wolfram_alpha_spoken_api_key": os.getenv("WOLFRAM_ALPHA_SPOKEN_API_KEY"),
     "wolfram_alpha_llm_api_key": os.getenv("WOLFRAM_ALPHA_LLM_API_KEY"),
@@ -32,6 +39,8 @@ config = {
     "gmail_smtp_app_password": os.getenv("GMAIL_SMTP_APP_PASSWORD"),
     "cta_bus_tracker_api_key": os.getenv("CTA_BUS_TRACKER_API_KEY"),
     "cta_train_tracker_api_key": os.getenv("CTA_TRAIN_TRACKER_API_KEY"),
+    "tavily_api_key": os.getenv("TAVILY_API_KEY"),
+    "brave_search_api_key": os.getenv("BRAVE_SEARCH_API_KEY"),
     # Personal Assistant chat session: idle (in seconds) after which the chat
     # thread + history is rotated/cleared on the next interaction.
     "session_idle_timeout_seconds": int(os.getenv("SESSION_IDLE_TIMEOUT_SECONDS", "1800")),
